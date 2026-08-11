@@ -1,67 +1,121 @@
-<svg xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="diagram-title" width="1130" height="460" viewBox="0 0 1130 460">
+<svg xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="diagram-title" width="1180" height="480" viewBox="0 0 1180 480">
 <title id="diagram-title">Transposition Table Microarchitecture</title>
 <defs>
-<marker id="arrow" viewBox="0 0 10 10" refX="8.3" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#374151"/></marker>
 <style>
-    .bg{fill:#ffffff}.title{font:600 18px ui-sans-serif,system-ui,sans-serif;fill:#111827}
-    .block{fill:#f8fafc;stroke:#1f2937;stroke-width:1.6}.memory-shadow{fill:#fff;stroke:#6b7280;stroke-width:1.2}
-    .memory{fill:#f8fafc}.fifo{fill:#f8fafc}.fsm{fill:#fff;stroke-dasharray:5 3}.io{fill:#fff}
-    .arbiter{fill:#f8fafc;stroke:#1f2937;stroke-width:1.6}.mux{fill:#f8fafc;stroke:#1f2937;stroke-width:1.6}
-    .symbol-line{stroke:#6b7280;stroke-width:1.1}.block-label{font:600 14px ui-sans-serif,system-ui,sans-serif;fill:#111827;text-anchor:middle}
-    .subtitle{font:11px ui-sans-serif,system-ui,sans-serif;fill:#4b5563;text-anchor:middle}
-    .group{fill:#f9fafb;fill-opacity:.72;stroke:#9ca3af;stroke-width:1;stroke-dasharray:6 4}
-    .group-label{font:600 11px ui-sans-serif,system-ui,sans-serif;fill:#4b5563}
-    .edge{fill:none;stroke:#374151;stroke-width:1.5;stroke-linejoin:round;stroke-linecap:square}
-    .edge.control{stroke:#6b7280;stroke-dasharray:5 4}.edge.clock{stroke:#6b7280;stroke-dasharray:2 3}
-    .edge.response{stroke:#374151}.edge-label{font:11px ui-sans-serif,system-ui,sans-serif;fill:#374151;text-anchor:middle}
-    .edge-label-bg{fill:#fff;fill-opacity:.94;stroke:none}
-    .label-leader{stroke:#9ca3af;stroke-width:1;stroke-dasharray:2 2}
+    .bg{fill:#ffffff}
+    .title{font:650 20px Inter,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;fill:#0f172a;text-anchor:middle}
+    .block{fill:#f8fafc;stroke:#334155;stroke-width:1.7}
+    .node.bigger .block{stroke-width:2}
+    .node.smaller .block{stroke-width:1.4}
+    .module{fill:#eef2ff;stroke:#4f46e5}
+    .logic,.alu,.adder,.subtractor,.addsub,.multiplier,.comparator,.and,.or,.xor,.not{fill:#fff7ed;stroke:#c2410c}
+    .memory-shadow{fill:#ccfbf1;stroke:#0f766e;stroke-width:1.2}
+    .memory,.fifo{fill:#ecfeff;stroke:#0f766e}
+    .reg,.counter{fill:#eff6ff;stroke:#2563eb}
+    .fsm,.arbiter{fill:#fdf2f8;stroke:#be185d}
+    .fsm{stroke-dasharray:5 3}
+    .mux,.demux{fill:#fefce8;stroke:#a16207}
+    .io{fill:#f0fdf4;stroke:#15803d}
+    .symbol-line{fill:none;stroke:#64748b;stroke-width:1.2}
+    .clock-glyph{stroke:#2563eb;stroke-width:1.7}
+    .operator-badge{fill:#fff;stroke:#c2410c;stroke-width:1.2}
+    .operator{font:700 12px Inter,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;fill:#9a3412;text-anchor:middle}
+    .operator.alu-operator{font-size:9px}
+    .block-label{font:600 14px Inter,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;fill:#0f172a;text-anchor:middle}
+    .block-label.bigger{font-size:15px;font-weight:650}
+    .block-label.smaller{font-size:13px;font-weight:550}
+    .subtitle{font:11px Inter,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;fill:#475569;text-anchor:middle}
+    .subtitle.bigger{font-size:11.5px}
+    .subtitle.smaller{font-size:10.5px}
+    .group{fill-opacity:.58;stroke-width:1.1;stroke-dasharray:6 4}
+    .group.group-0{fill:#eff6ff;stroke:#93c5fd}
+    .group.group-1{fill:#f0fdf4;stroke:#86efac}
+    .group.group-2{fill:#fff7ed;stroke:#fdba74}
+    .group.group-3{fill:#faf5ff;stroke:#d8b4fe}
+    .group-label{font:650 13px Inter,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;fill:#334155}
+    .edge{fill:none;stroke:#475569;stroke-width:1.6;stroke-linejoin:round;stroke-linecap:butt}
+    .edge.data{stroke:#2563eb}
+    .edge.bus{stroke-width:3}
+    .edge.control{stroke:#a16207;stroke-dasharray:6 4}
+    .edge.clock{stroke:#7c3aed;stroke-dasharray:2 3}
+    .edge.response{stroke:#0f766e}
+    .arrowhead{stroke:none}
+    .arrowhead.data{fill:#2563eb}
+    .arrowhead.control{fill:#a16207}
+    .arrowhead.clock{fill:#7c3aed}
+    .arrowhead.response{fill:#0f766e}
+    .edge-label{font:500 10.5px Inter,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;fill:#334155;text-anchor:middle}
+    .edge-label.data{fill:#1d4ed8}
+    .edge-label.control{fill:#854d0e}
+    .edge-label.clock{fill:#6d28d9}
+    .edge-label.response{fill:#0f766e}
+    .edge-label-bg{fill:#fff;fill-opacity:.98;stroke:#cbd5e1;stroke-width:.7}
+    .label-leader{fill:none;stroke:#cbd5e1;stroke-width:.9}
     </style>
 </defs>
-<rect x="0" y="0" width="1130" height="460" class="bg"/>
-<text x="62" y="30" class="title">Transposition Table Microarchitecture</text>
-<rect x="268" y="168" width="380" height="116" rx="10" class="group"/>
-<text x="278" y="183" class="group-label">Frontend</text>
-<polyline points="196,220 260,220 260,230 290,230" class="edge data" marker-end="url(#arrow)"/>
-<polyline points="416,230 500,230" class="edge data" marker-end="url(#arrow)"/>
-<polyline points="626,230 680,230 680,250 710,250" class="edge data" marker-end="url(#arrow)"/>
-<polyline points="810,272 810,300 800,300 800,330" class="edge data" marker-end="url(#arrow)"/>
-<polyline points="760,330 760,272" class="edge response" marker-end="url(#arrow)"/>
-<polyline points="853,240 940,240" class="edge data" marker-end="url(#arrow)"/>
-<polyline points="940,220 910,220 910,420 220,420 220,240 196,240" class="edge response" marker-end="url(#arrow)"/>
-<polyline points="560,132 560,200" class="edge control" marker-end="url(#arrow)"/>
-<polyline points="626,100 680,100 680,220 710,220" class="edge control" marker-end="url(#arrow)"/>
-<rect x="60" y="200" width="136" height="62" rx="6" class="block"/>
-<text x="128" y="236" class="block-label">Search Threads</text>
-<rect x="290" y="200" width="126" height="62" rx="5" class="block fifo"/>
-<line x1="303" y1="210" x2="303" y2="252" class="symbol-line"/>
-<line x1="403" y1="210" x2="403" y2="252" class="symbol-line"/>
-<text x="353" y="236" class="block-label">Request FIFO</text>
-<polygon points="510,200 616,200 626,231 616,262 510,262 500,231" class="block arbiter"/>
-<text x="563" y="236" class="block-label">Arbiter</text>
-<rect x="710" y="200" width="143" height="72" rx="6" class="block"/>
-<text x="781" y="231" class="block-label">TT Pipeline</text>
-<text x="781" y="253" class="subtitle">probe / replace</text>
-<rect x="727" y="337" width="126" height="62" rx="4" class="memory-shadow"/>
-<rect x="720" y="330" width="126" height="62" rx="4" class="block memory"/>
-<line x1="732" y1="344" x2="834" y2="344" class="symbol-line"/>
-<text x="783" y="366" class="block-label">TT Storage</text>
-<rect x="940" y="200" width="129" height="62" rx="5" class="block fifo"/>
-<line x1="953" y1="210" x2="953" y2="252" class="symbol-line"/>
-<line x1="1056" y1="210" x2="1056" y2="252" class="symbol-line"/>
-<text x="1004" y="236" class="block-label">Response FIFO</text>
-<rect x="500" y="70" width="126" height="62" rx="12" class="block fsm"/>
-<text x="563" y="106" class="block-label">TT Control</text>
-<line x1="208" y1="220" x2="208" y2="196" class="label-leader"/>
-<rect x="151.8" y="180.0" width="112.4" height="16.0" rx="3" class="edge-label-bg"/>
-<text x="208.0" y="192.0" class="edge-label">TT request · 96b</text>
-<line x1="805" y1="300" x2="805" y2="296" class="label-leader"/>
-<rect x="784.0" y="280.0" width="42.0" height="16.0" rx="3" class="edge-label-bg"/>
-<text x="805.0" y="292.0" class="edge-label">entry</text>
-<line x1="760" y1="301" x2="756" y2="301" class="label-leader"/>
-<rect x="688.4" y="293.0" width="67.6" height="16.0" rx="3" class="edge-label-bg"/>
-<text x="722.2" y="305.0" class="edge-label">read data</text>
-<line x1="896" y1="240" x2="896" y2="216" class="label-leader"/>
-<rect x="855.8" y="200.0" width="80.4" height="16.0" rx="3" class="edge-label-bg"/>
-<text x="896.0" y="212.0" class="edge-label">hit / score</text>
+<rect x="0" y="0" width="1180" height="480" class="bg"/>
+<text x="590.0" y="32" class="title">Transposition Table Microarchitecture</text>
+<rect x="758" y="177" width="380" height="116" rx="10" class="group group-0"/>
+<text x="768" y="194" class="group-label">Frontend</text>
+<rect x="337" y="343" width="134" height="68" rx="4" class="memory-shadow"/>
+<polyline points="194,230 230,230 230,180 740,180 740,230 769,230" class="edge data bus"/>
+<polyline points="906,240 950,240 950,260 980,260" class="edge data"/>
+<polyline points="990,240 950,240 950,300 500,300 500,230 474,230" class="edge data"/>
+<polyline points="380,274 380,326" class="edge data"/>
+<polyline points="410,336 410,284" class="edge response"/>
+<polyline points="464,250 540,250" class="edge data"/>
+<polyline points="550,230 500,230 500,260 490,260 490,430 230,430 230,250 204,250" class="edge response"/>
+<polyline points="464,110 950,110 950,220 980,220" class="edge control"/>
+<polyline points="400,144 400,196" class="edge control"/>
+<g class="node normal">
+<rect x="60" y="206" width="134" height="68" rx="6" class="block module"/>
+<text x="127" y="244.0" class="block-label">Search Threads</text>
+</g>
+<g class="node normal">
+<rect x="780" y="209" width="126" height="62" rx="5" class="block fifo"/>
+<line x1="793" y1="219" x2="793" y2="261" class="symbol-line"/>
+<line x1="893" y1="219" x2="893" y2="261" class="symbol-line"/>
+<text x="843" y="244.0" class="block-label">Request FIFO</text>
+</g>
+<g class="node normal">
+<polygon points="1000,209 1106,209 1116,240 1106,271 1000,271 990,240" class="block arbiter"/>
+<text x="1053" y="244.0" class="block-label">Arbiter</text>
+</g>
+<g class="node normal">
+<rect x="330" y="206" width="134" height="68" rx="6" class="block logic"/>
+<text x="397" y="234.0" class="block-label">TT Pipeline</text>
+<text x="397" y="254.0" class="subtitle">probe / replace</text>
+</g>
+<g class="node normal">
+<rect x="330" y="336" width="134" height="68" rx="4" class="block memory"/>
+<text x="397" y="374.0" class="block-label">TT Storage</text>
+</g>
+<g class="node normal">
+<rect x="550" y="206" width="134" height="68" rx="5" class="block fifo"/>
+<line x1="563" y1="216" x2="563" y2="264" class="symbol-line"/>
+<line x1="671" y1="216" x2="671" y2="264" class="symbol-line"/>
+<text x="617" y="244.0" class="block-label">Response FIFO</text>
+</g>
+<g class="node normal">
+<rect x="330" y="76" width="134" height="68" rx="12" class="block fsm"/>
+<text x="397" y="114.0" class="block-label">TT Control</text>
+</g>
+<polygon points="769,235.5 780,230 769,224.5" class="arrowhead data bus"/>
+<polygon points="980,265 990,260 980,255" class="arrowhead data"/>
+<polygon points="474,225 464,230 474,235" class="arrowhead data"/>
+<polygon points="375,326 380,336 385,326" class="arrowhead data"/>
+<polygon points="415,284 410,274 405,284" class="arrowhead response"/>
+<polygon points="540,255 550,250 540,245" class="arrowhead data"/>
+<polygon points="204,245 194,250 204,255" class="arrowhead response"/>
+<polygon points="980,225 990,220 980,215" class="arrowhead control"/>
+<polygon points="395,196 400,206 405,196" class="arrowhead control"/>
+<rect x="439.0" y="154.0" width="92.0" height="18.0" rx="5" class="edge-label-bg"/>
+<text x="485.0" y="166.0" class="edge-label data">TT request · 96b</text>
+<rect x="335.0" y="297.0" width="37.0" height="18.0" rx="5" class="edge-label-bg"/>
+<text x="353.5" y="309.0" class="edge-label data">entry</text>
+<rect x="418.0" y="303.0" width="56.2" height="18.0" rx="5" class="edge-label-bg"/>
+<text x="446.1" y="315.0" class="edge-label response">read data</text>
+<polyline points="487,250 487,282 474,282" class="label-leader"/>
+<rect x="419.9" y="282.0" width="62.2" height="18.0" rx="5" class="edge-label-bg"/>
+<text x="451.0" y="294.0" class="edge-label data">hit / score</text>
 </svg>

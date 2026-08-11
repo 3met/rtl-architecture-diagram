@@ -1,0 +1,285 @@
+<svg xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="diagram-title" width="1460" height="1090" viewBox="0 0 1460 1090">
+<title id="diagram-title">NNUE Evaluator Datapath</title>
+<defs>
+<style>
+    .bg{fill:#ffffff}
+    .title{font:650 20px Inter,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;fill:#0f172a;text-anchor:middle}
+    .block{fill:#f8fafc;stroke:#334155;stroke-width:1.7}
+    .node.bigger .block{stroke-width:2}
+    .node.smaller .block{stroke-width:1.4}
+    .module{fill:#eef2ff;stroke:#4f46e5}
+    .logic,.alu,.adder,.subtractor,.addsub,.multiplier,.comparator,.and,.or,.xor,.not{fill:#fff7ed;stroke:#c2410c}
+    .memory-shadow{fill:#ccfbf1;stroke:#0f766e;stroke-width:1.2}
+    .memory,.fifo{fill:#ecfeff;stroke:#0f766e}
+    .reg,.counter{fill:#eff6ff;stroke:#2563eb}
+    .fsm,.arbiter{fill:#fdf2f8;stroke:#be185d}
+    .fsm{stroke-dasharray:5 3}
+    .mux,.demux{fill:#fefce8;stroke:#a16207}
+    .io{fill:#f0fdf4;stroke:#15803d}
+    .symbol-line{fill:none;stroke:#64748b;stroke-width:1.2}
+    .clock-glyph{stroke:#2563eb;stroke-width:1.7}
+    .operator-badge{fill:#fff;stroke:#c2410c;stroke-width:1.2}
+    .operator{font:700 12px Inter,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;fill:#9a3412;text-anchor:middle}
+    .operator.alu-operator{font-size:9px}
+    .block-label{font:600 14px Inter,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;fill:#0f172a;text-anchor:middle}
+    .block-label.bigger{font-size:15px;font-weight:650}
+    .block-label.smaller{font-size:13px;font-weight:550}
+    .subtitle{font:11px Inter,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;fill:#475569;text-anchor:middle}
+    .subtitle.bigger{font-size:11.5px}
+    .subtitle.smaller{font-size:10.5px}
+    .group{fill-opacity:.58;stroke-width:1.1;stroke-dasharray:6 4}
+    .group.group-0{fill:#eff6ff;stroke:#93c5fd}
+    .group.group-1{fill:#f0fdf4;stroke:#86efac}
+    .group.group-2{fill:#fff7ed;stroke:#fdba74}
+    .group.group-3{fill:#faf5ff;stroke:#d8b4fe}
+    .group-label{font:650 13px Inter,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;fill:#334155}
+    .edge{fill:none;stroke:#475569;stroke-width:1.6;stroke-linejoin:round;stroke-linecap:butt}
+    .edge.data{stroke:#2563eb}
+    .edge.bus{stroke-width:3}
+    .edge.control{stroke:#a16207;stroke-dasharray:6 4}
+    .edge.clock{stroke:#7c3aed;stroke-dasharray:2 3}
+    .edge.response{stroke:#0f766e}
+    .arrowhead{stroke:none}
+    .arrowhead.data{fill:#2563eb}
+    .arrowhead.control{fill:#a16207}
+    .arrowhead.clock{fill:#7c3aed}
+    .arrowhead.response{fill:#0f766e}
+    .edge-label{font:500 10.5px Inter,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;fill:#334155;text-anchor:middle}
+    .edge-label.data{fill:#1d4ed8}
+    .edge-label.control{fill:#854d0e}
+    .edge-label.clock{fill:#6d28d9}
+    .edge-label.response{fill:#0f766e}
+    .edge-label-bg{fill:#fff;fill-opacity:.98;stroke:#cbd5e1;stroke-width:.7}
+    .label-leader{fill:none;stroke:#cbd5e1;stroke-width:.9}
+    </style>
+</defs>
+<rect x="0" y="0" width="1460" height="1090" class="bg"/>
+<text x="730.0" y="32" class="title">NNUE Evaluator Datapath</text>
+<rect x="38" y="54" width="1382" height="412" rx="10" class="group group-0"/>
+<text x="48" y="71" class="group-label">Incremental accumulator update path</text>
+<rect x="38" y="474" width="1152" height="576" rx="10" class="group group-1"/>
+<text x="48" y="491" class="group-label">Output-layer evaluation path</text>
+<rect x="627" y="219" width="186" height="96" rx="4" class="memory-shadow"/>
+<rect x="927" y="383" width="178" height="68" rx="4" class="memory-shadow"/>
+<rect x="1227" y="226" width="178" height="82" rx="4" class="memory-shadow"/>
+<rect x="337" y="649" width="171" height="96" rx="4" class="memory-shadow"/>
+<rect x="763" y="513" width="163" height="68" rx="4" class="memory-shadow"/>
+<rect x="800" y="967" width="126" height="68" rx="4" class="memory-shadow"/>
+<polyline points="231,260 339,260" class="edge data bus"/>
+<polyline points="430,154 430,209" class="edge control"/>
+<polyline points="506,270 609,270" class="edge data bus"/>
+<polyline points="806,260 909,260" class="edge data bus"/>
+<polyline points="506,250 550,250 550,180 880,180 880,240 910,240" class="edge control"/>
+<polyline points="1010,376 1010,319" class="edge data bus"/>
+<polyline points="1220,270 1109,270" class="edge response bus"/>
+<polyline points="1098,250 1210,250" class="edge data"/>
+<polyline points="920,280 880,280 880,470 390,470 390,631" class="edge data bus"/>
+<polyline points="1010,212 1010,165" class="edge data bus"/>
+<polyline points="210,680 319,680" class="edge data bus"/>
+<polyline points="210,700 250,700 250,770 630,770 630,748" class="edge data"/>
+<polyline points="470,574 470,632" class="edge control"/>
+<polyline points="501,690 559,690" class="edge data bus"/>
+<polyline points="590,574 590,632" class="edge control"/>
+<polyline points="696,690 760,690" class="edge data"/>
+<polyline points="609,540 746,540" class="edge control"/>
+<polyline points="840,574 840,638" class="edge data bus"/>
+<polyline points="905,690 1009,690" class="edge data bus"/>
+<polyline points="1090,738 1090,798" class="edge data bus"/>
+<polyline points="1006,850 944,850" class="edge data bus"/>
+<polyline points="860,960 860,909" class="edge data bus"/>
+<polyline points="780,850 719,850" class="edge data bus"/>
+<polyline points="570,850 509,850" class="edge data bus"/>
+<g class="node normal">
+<rect x="60" y="233" width="171" height="54" rx="27" class="block io"/>
+<text x="145" y="264.0" class="block-label">Search Update Stream</text>
+</g>
+<g class="node normal">
+<rect x="350" y="219" width="156" height="82" rx="2" class="block reg"/>
+<polyline points="350,281 358,287 350,293" class="symbol-line clock-glyph"/>
+<text x="428" y="245.5" class="block-label">Update /</text>
+<text x="428" y="262.5" class="block-label">Row Regs</text>
+<text x="428" y="282.5" class="subtitle">one request per cycle</text>
+</g>
+<g class="node normal">
+<rect x="336" y="86" width="184" height="68" rx="12" class="block fsm"/>
+<text x="428" y="114.0" class="block-label">Update Pipeline Control</text>
+<text x="428" y="134.0" class="subtitle">busy / complete</text>
+</g>
+<g class="node normal">
+<rect x="620" y="212" width="186" height="96" rx="4" class="block memory"/>
+<text x="713" y="238.5" class="block-label">Feature</text>
+<text x="713" y="255.5" class="block-label">Transformer ROM</text>
+<text x="713" y="275.5" class="subtitle">768 rows x 128</text>
+<text x="713" y="289.5" class="subtitle">signed 2b weights</text>
+</g>
+<g class="node normal">
+<rect x="920" y="376" width="178" height="68" rx="4" class="block memory"/>
+<text x="1009" y="404.0" class="block-label">Accumulator Bias ROM</text>
+<text x="1009" y="424.0" class="subtitle">128 x signed 3b</text>
+</g>
+<g class="node normal">
+<rect x="920" y="212" width="178" height="96" rx="6" class="block addsub"/>
+<circle cx="934" cy="226" r="8" class="operator-badge"/>
+<text x="934" y="230" class="operator">±</text>
+<text x="1009" y="238.5" class="block-label">2 x 128-Lane</text>
+<text x="1009" y="255.5" class="block-label">State Update</text>
+<text x="1009" y="275.5" class="subtitle">bias/old mux +</text>
+<text x="1009" y="289.5" class="subtitle">modular add/sub</text>
+</g>
+<g class="node normal">
+<rect x="1220" y="219" width="178" height="82" rx="4" class="block memory"/>
+<text x="1309" y="254.0" class="block-label">Update-State Mirror</text>
+<text x="1309" y="274.0" class="subtitle">per thread: 2 x 128 x signed 5b</text>
+</g>
+<g class="node normal">
+<rect x="940" y="86" width="138" height="68" rx="34" class="block io"/>
+<text x="1009" y="114.0" class="block-label">Update-Done Tag</text>
+<text x="1009" y="134.0" class="subtitle">thread + ply</text>
+</g>
+<g class="node normal">
+<rect x="70" y="656" width="142" height="68" rx="34" class="block io"/>
+<text x="141" y="684.0" class="block-label">Search Eval Issue</text>
+<text x="141" y="704.0" class="subtitle">thread + side to move</text>
+</g>
+<g class="node normal">
+<rect x="438" y="506" width="171" height="68" rx="12" class="block fsm"/>
+<text x="523" y="534.0" class="block-label">Evaluation Sequencer</text>
+<text x="523" y="554.0" class="subtitle">2 MAC rows; II = 3 cycles</text>
+</g>
+<g class="node normal">
+<rect x="330" y="642" width="171" height="96" rx="4" class="block memory"/>
+<text x="415" y="675.5" class="block-label">Evaluation-State</text>
+<text x="415" y="692.5" class="block-label">Mirror</text>
+<text x="415" y="712.5" class="subtitle">synchronous 1280b snapshot</text>
+</g>
+<g class="node normal">
+<rect x="570" y="642" width="126" height="96" rx="6" class="block logic"/>
+<text x="633" y="668.5" class="block-label">Perspective</text>
+<text x="633" y="685.5" class="block-label">Order + Clip</text>
+<text x="633" y="705.5" class="subtitle">STM first; clamp</text>
+<text x="633" y="719.5" class="subtitle">each lane to 0..7</text>
+</g>
+<g class="node normal">
+<rect x="756" y="506" width="163" height="68" rx="4" class="block memory"/>
+<text x="837" y="534.0" class="block-label">Output-Weight Rows</text>
+<text x="837" y="554.0" class="subtitle">2 rows x 128 signed 3b</text>
+</g>
+<g class="node normal">
+<rect x="770" y="649" width="135" height="82" rx="6" class="block multiplier"/>
+<circle cx="784" cy="663" r="8" class="operator-badge"/>
+<text x="784" y="667" class="operator">×</text>
+<text x="837" y="675.5" class="block-label">128-Lane</text>
+<text x="837" y="692.5" class="block-label">Product Bank</text>
+<text x="837" y="712.5" class="subtitle">96 logic + 32 multiply</text>
+</g>
+<g class="node normal">
+<rect x="1020" y="642" width="135" height="96" rx="2" class="block reg"/>
+<polyline points="1020,718 1028,724 1020,730" class="symbol-line clock-glyph"/>
+<text x="1087" y="675.5" class="block-label">Partial-Sum</text>
+<text x="1087" y="692.5" class="block-label">Registers</text>
+<text x="1087" y="712.5" class="subtitle">16 groups x 8 products</text>
+</g>
+<g class="node normal">
+<rect x="1006" y="809" width="162" height="82" rx="6" class="block adder"/>
+<circle cx="1020" cy="823" r="8" class="operator-badge"/>
+<text x="1020" y="827" class="operator">+</text>
+<text x="1087" y="835.5" class="block-label">Upper</text>
+<text x="1087" y="852.5" class="block-label">Adder Tree</text>
+<text x="1087" y="872.5" class="subtitle">16 partials to one row sum</text>
+</g>
+<g class="node normal">
+<rect x="793" y="960" width="126" height="68" rx="4" class="block memory"/>
+<text x="856" y="988.0" class="block-label">Output Bias</text>
+<text x="856" y="1008.0" class="subtitle">signed 5b</text>
+</g>
+<g class="node normal">
+<rect x="780" y="802" width="153" height="96" rx="2" class="block reg"/>
+<polyline points="780,878 788,884 780,890" class="symbol-line clock-glyph"/>
+<text x="856" y="828.5" class="block-label">Two-Row</text>
+<text x="856" y="845.5" class="block-label">Running Sum</text>
+<text x="856" y="865.5" class="subtitle">bias seed +</text>
+<text x="856" y="879.5" class="subtitle">both MAC rows</text>
+</g>
+<g class="node normal">
+<rect x="570" y="802" width="138" height="96" rx="6" class="block logic"/>
+<text x="639" y="835.5" class="block-label">Result Register</text>
+<text x="639" y="852.5" class="block-label">+ Score Clip</text>
+<text x="639" y="872.5" class="subtitle">saturate to +/-30999</text>
+</g>
+<g class="node normal">
+<rect x="360" y="816" width="138" height="68" rx="34" class="block io"/>
+<text x="429" y="844.0" class="block-label">NNUE Correction</text>
+<text x="429" y="864.0" class="subtitle">signed 16b to search</text>
+</g>
+<polygon points="339,265.5 350,260 339,254.5" class="arrowhead data bus"/>
+<polygon points="425,209 430,219 435,209" class="arrowhead control"/>
+<polygon points="609,275.5 620,270 609,264.5" class="arrowhead data bus"/>
+<polygon points="909,265.5 920,260 909,254.5" class="arrowhead data bus"/>
+<polygon points="910,245 920,240 910,235" class="arrowhead control"/>
+<polygon points="1015.5,319 1010,308 1004.5,319" class="arrowhead data bus"/>
+<polygon points="1109,264.5 1098,270 1109,275.5" class="arrowhead response bus"/>
+<polygon points="1210,255 1220,250 1210,245" class="arrowhead data"/>
+<polygon points="384.5,631 390,642 395.5,631" class="arrowhead data bus"/>
+<polygon points="1015.5,165 1010,154 1004.5,165" class="arrowhead data bus"/>
+<polygon points="319,685.5 330,680 319,674.5" class="arrowhead data bus"/>
+<polygon points="635,748 630,738 625,748" class="arrowhead data"/>
+<polygon points="465,632 470,642 475,632" class="arrowhead control"/>
+<polygon points="559,695.5 570,690 559,684.5" class="arrowhead data bus"/>
+<polygon points="585,632 590,642 595,632" class="arrowhead control"/>
+<polygon points="760,695 770,690 760,685" class="arrowhead data"/>
+<polygon points="746,545 756,540 746,535" class="arrowhead control"/>
+<polygon points="834.5,638 840,649 845.5,638" class="arrowhead data bus"/>
+<polygon points="1009,695.5 1020,690 1009,684.5" class="arrowhead data bus"/>
+<polygon points="1084.5,798 1090,809 1095.5,798" class="arrowhead data bus"/>
+<polygon points="944,844.5 933,850 944,855.5" class="arrowhead data bus"/>
+<polygon points="865.5,909 860,898 854.5,909" class="arrowhead data bus"/>
+<polygon points="719,844.5 708,850 719,855.5" class="arrowhead data bus"/>
+<polygon points="509,844.5 498,850 509,855.5" class="arrowhead data bus"/>
+<polyline points="290,260 290,222" class="label-leader"/>
+<rect x="222.2" y="204.0" width="111.6" height="18.0" rx="5" class="edge-label-bg"/>
+<text x="278.0" y="216.0" class="edge-label data">update request · 35b</text>
+<polyline points="563,270 563,314" class="label-leader"/>
+<rect x="469.1" y="314.0" width="139.8" height="18.0" rx="5" class="edge-label-bg"/>
+<text x="539.0" y="326.0" class="edge-label data">white + black feature · 20b</text>
+<polyline points="863,260 863,316 843,316" class="label-leader"/>
+<rect x="706.7" y="316.0" width="144.6" height="18.0" rx="5" class="edge-label-bg"/>
+<text x="779.0" y="328.0" class="edge-label data">two transformer rows · 512b</text>
+<rect x="638.6" y="154.0" width="152.8" height="18.0" rx="5" class="edge-label-bg"/>
+<text x="715.0" y="166.0" class="edge-label control">thread / add / clear / enables</text>
+<rect x="900.2" y="334.0" width="101.8" height="18.0" rx="5" class="edge-label-bg"/>
+<text x="951.1" y="346.0" class="edge-label data">clear values · 384b</text>
+<polyline points="1159,270 1159,314" class="label-leader"/>
+<rect x="1107.8" y="314.0" width="126.4" height="18.0" rx="5" class="edge-label-bg"/>
+<text x="1171.0" y="326.0" class="edge-label response">old thread state · 1280b</text>
+<rect x="577.2" y="444.0" width="115.6" height="18.0" rx="5" class="edge-label-bg"/>
+<text x="635.0" y="456.0" class="edge-label data">mirrored write · 1280b</text>
+<rect x="1018.0" y="175.0" width="117.2" height="18.0" rx="5" class="edge-label-bg"/>
+<text x="1076.6" y="187.0" class="edge-label data">complete request · 10b</text>
+<rect x="225.2" y="654.0" width="89.6" height="18.0" rx="5" class="edge-label-bg"/>
+<text x="270.0" y="666.0" class="edge-label data">thread read · 4b</text>
+<rect x="396.3" y="778.0" width="87.4" height="18.0" rx="5" class="edge-label-bg"/>
+<text x="440.0" y="790.0" class="edge-label data">side to move · 1b</text>
+<polyline points="536,690 536,746" class="label-leader"/>
+<rect x="471.6" y="746.0" width="128.8" height="18.0" rx="5" class="edge-label-bg"/>
+<text x="536.0" y="758.0" class="edge-label data">two perspectives · 1280b</text>
+<rect x="598.0" y="600.0" width="94.6" height="18.0" rx="5" class="edge-label-bg"/>
+<text x="645.3" y="612.0" class="edge-label control">perspective / row</text>
+<rect x="738.6" y="604.0" width="93.4" height="18.0" rx="5" class="edge-label-bg"/>
+<text x="785.3" y="616.0" class="edge-label data">weight row · 384b</text>
+<polyline points="962,690 962,640" class="label-leader"/>
+<rect x="889.8" y="622.0" width="120.4" height="18.0" rx="5" class="edge-label-bg"/>
+<text x="950.0" y="634.0" class="edge-label data">signed products · 768b</text>
+<rect x="971.2" y="760.0" width="110.8" height="18.0" rx="5" class="edge-label-bg"/>
+<text x="1026.6" y="772.0" class="edge-label data">16 partial sums · 144b</text>
+<polyline points="970,850 970,800" class="label-leader"/>
+<rect x="946.5" y="782.0" width="71.0" height="18.0" rx="5" class="edge-label-bg"/>
+<text x="982.0" y="794.0" class="edge-label data">row sum · 13b</text>
+<rect x="868.0" y="921.0" width="88.4" height="18.0" rx="5" class="edge-label-bg"/>
+<text x="912.2" y="933.0" class="edge-label data">initial value · 5b</text>
+<polyline points="744,850 744,794" class="label-leader"/>
+<rect x="700.4" y="776.0" width="87.2" height="18.0" rx="5" class="edge-label-bg"/>
+<text x="744.0" y="788.0" class="edge-label data">output sum · 14b</text>
+<polyline points="534,850 534,894" class="label-leader"/>
+<rect x="489.2" y="894.0" width="65.6" height="18.0" rx="5" class="edge-label-bg"/>
+<text x="522.0" y="906.0" class="edge-label data">result · 16b</text>
+</svg>

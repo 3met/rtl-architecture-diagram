@@ -1,0 +1,57 @@
+{
+  "title": "NNUE Evaluator Datapath",
+  "blocks": [
+    {"id":"update_in","label":"Search Update Stream","kind":"io","at":[0,2],"group":"update"},
+    {"id":"update_stage","label":"Update / Row Regs","kind":"reg","at":[1,2],"subtitle":"one request per cycle","group":"update"},
+    {"id":"update_control","label":"Update Pipeline Control","kind":"fsm","at":[1,1],"subtitle":"busy / complete","group":"update"},
+    {"id":"feature_rom","label":"Feature Transformer ROM","kind":"memory","at":[2,2],"subtitle":"768 rows x 128 signed 2b weights","group":"update"},
+    {"id":"accumulator_bias","label":"Accumulator Bias ROM","kind":"memory","at":[2,3],"subtitle":"128 x signed 3b","group":"update"},
+    {"id":"lane_update","label":"2 x 128-Lane State Update","kind":"addsub","at":[3,2],"subtitle":"bias/old mux + modular add/sub","group":"update"},
+    {"id":"update_memory","label":"Update-State Mirror","kind":"memory","at":[4,2],"subtitle":"per thread: 2 x 128 x signed 5b","group":"update"},
+    {"id":"update_done","label":"Update-Done Tag","kind":"io","at":[4,1],"subtitle":"thread + ply","group":"update"},
+
+    {"id":"eval_in","label":"Search Eval Issue","kind":"io","at":[2,5],"subtitle":"thread + side to move","group":"evaluation"},
+    {"id":"eval_control","label":"Evaluation Sequencer","kind":"fsm","at":[5,4],"subtitle":"2 MAC rows; II = 3 cycles","group":"evaluation"},
+    {"id":"eval_memory","label":"Evaluation-State Mirror","kind":"memory","at":[4,5],"subtitle":"synchronous 1280b snapshot","group":"evaluation"},
+    {"id":"activation","label":"Perspective Order + Clip","kind":"logic","at":[5,5],"subtitle":"STM first; clamp each lane to 0..7","group":"evaluation"},
+    {"id":"weight_rows","label":"Output-Weight Rows","kind":"memory","at":[6,6],"subtitle":"2 rows x 128 signed 3b","group":"evaluation"},
+    {"id":"products","label":"128-Lane Product Bank","kind":"multiplier","at":[6,5],"subtitle":"96 logic + 32 multiply","group":"evaluation"},
+    {"id":"partial_regs","label":"Partial-Sum Registers","kind":"reg","at":[7,5],"subtitle":"16 groups x 8 products","group":"evaluation"},
+    {"id":"upper_tree","label":"Upper Adder Tree","kind":"adder","at":[8,5],"subtitle":"16 partials to one row sum","group":"evaluation"},
+    {"id":"output_bias","label":"Output Bias","kind":"memory","at":[8,6],"subtitle":"signed 5b","group":"evaluation"},
+    {"id":"running_sum","label":"Two-Row Running Sum","kind":"reg","at":[9,5],"subtitle":"bias seed + both MAC rows","group":"evaluation"},
+    {"id":"score_clip","label":"Result Register + Score Clip","kind":"logic","at":[10,5],"subtitle":"saturate to +/-30999","group":"evaluation"},
+    {"id":"result_out","label":"NNUE Correction","kind":"io","at":[11,5],"subtitle":"signed 16b to search","group":"evaluation"}
+  ],
+  "groups": [
+    {"id":"update","label":"Incremental accumulator update path"},
+    {"id":"evaluation","label":"Output-layer evaluation path"}
+  ],
+  "edges": [
+    {"from":"update_in.req","to":"update_stage.in","label":"update request","width":35},
+    {"from":"update_control.accept","to":"update_stage.enable","kind":"control"},
+    {"from":"update_stage.indices","to":"feature_rom.addr","label":"white + black feature","width":20},
+    {"from":"feature_rom.rows","to":"lane_update.weights","label":"two transformer rows","width":512},
+    {"from":"update_stage.op","to":"lane_update.control","label":"thread / add / clear / enables","kind":"control"},
+    {"from":"accumulator_bias.data","to":"lane_update.bias","label":"clear values","width":384},
+    {"from":"update_memory.old","to":"lane_update.old","label":"old thread state","width":1280,"kind":"response"},
+    {"from":"lane_update.commit","to":"update_memory.write"},
+    {"from":"lane_update.mirror","to":"eval_memory.write","label":"mirrored write","width":1280},
+    {"from":"lane_update.done","to":"update_done.tag","label":"complete request","width":10},
+
+    {"from":"eval_in.issue","to":"eval_memory.read","label":"thread read","width":4},
+    {"from":"eval_in.turn","to":"activation.turn","label":"side to move","width":1},
+    {"from":"eval_control.read","to":"eval_memory.enable","kind":"control"},
+    {"from":"eval_memory.snapshot","to":"activation.state","label":"two perspectives","width":1280},
+    {"from":"eval_control.row","to":"activation.select","label":"perspective / row","kind":"control"},
+    {"from":"activation.values","to":"products.activations"},
+    {"from":"eval_control.row_addr","to":"weight_rows.addr","kind":"control"},
+    {"from":"weight_rows.data","to":"products.weights","label":"weight row","width":384},
+    {"from":"products.out","to":"partial_regs.in","label":"signed products","width":768},
+    {"from":"partial_regs.out","to":"upper_tree.in","label":"16 partial sums","width":144},
+    {"from":"upper_tree.sum","to":"running_sum.row","label":"row sum","width":13},
+    {"from":"output_bias.data","to":"running_sum.bias","label":"initial value","width":5},
+    {"from":"running_sum.total","to":"score_clip.in","label":"output sum","width":14},
+    {"from":"score_clip.result","to":"result_out.correction","label":"result","width":16}
+  ]
+}
