@@ -9,6 +9,7 @@ RENDERER_PATH = SKILL / "scripts" / "render.py"
 EXAMPLE_JSON = SKILL / "examples" / "tt.diagram.json"
 EXAMPLE_SVG = SKILL / "examples" / "tt.svg"
 NNUE_JSON = ROOT / "examples" / "nnue-evaluator.diagram.json"
+NNUE_SVG = ROOT / "examples" / "nnue-evaluator.svg"
 
 
 def load_renderer():
@@ -26,4 +27,9 @@ renderer = load_renderer()
 
 def render_example():
     title, boxes, edges, groups, warnings = renderer.load_diagram(EXAMPLE_JSON)
+    return renderer.render(title, boxes, edges, groups, warnings), warnings
+
+
+def render_nnue_example():
+    title, boxes, edges, groups, warnings = renderer.load_diagram(NNUE_JSON)
     return renderer.render(title, boxes, edges, groups, warnings), warnings

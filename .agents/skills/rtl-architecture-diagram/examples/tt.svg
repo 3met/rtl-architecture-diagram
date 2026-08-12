@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="diagram-title" width="1180" height="480" viewBox="0 0 1180 480">
+<svg xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="diagram-title" width="1240" height="480" viewBox="0 0 1240 480">
 <title id="diagram-title">Transposition Table Microarchitecture</title>
 <defs>
 <style>
@@ -53,33 +53,33 @@
     .label-leader{fill:none;stroke:#cbd5e1;stroke-width:.9}
     </style>
 </defs>
-<rect x="0" y="0" width="1180" height="480" class="bg"/>
-<text x="590.0" y="32" class="title">Transposition Table Microarchitecture</text>
-<rect x="758" y="177" width="380" height="116" rx="10" class="group group-0"/>
-<text x="768" y="194" class="group-label">Frontend</text>
+<rect x="0" y="0" width="1240" height="480" class="bg"/>
+<text x="620.0" y="32" class="title">Transposition Table Microarchitecture</text>
+<rect x="818" y="177" width="380" height="116" rx="10" class="group group-0"/>
+<text x="828" y="194" class="group-label">Frontend</text>
 <rect x="337" y="343" width="134" height="68" rx="4" class="memory-shadow"/>
-<polyline points="194,230 230,230 230,180 740,180 740,230 769,230" class="edge data bus"/>
-<polyline points="906,240 950,240 950,260 980,260" class="edge data"/>
-<polyline points="990,240 950,240 950,300 500,300 500,230 474,230" class="edge data"/>
+<polyline points="194,230 230,230 230,290 800,290 800,230 829,230" class="edge data bus"/>
+<polyline points="966,240 1000,240 1000,260 1040,260" class="edge data"/>
+<polyline points="1050,240 1010,240 1010,190 500,190 500,230 474,230" class="edge data"/>
 <polyline points="380,274 380,326" class="edge data"/>
 <polyline points="410,336 410,284" class="edge response"/>
-<polyline points="464,250 540,250" class="edge data"/>
-<polyline points="550,230 500,230 500,260 490,260 490,430 230,430 230,250 204,250" class="edge response"/>
-<polyline points="464,110 950,110 950,220 980,220" class="edge control"/>
+<polyline points="464,250 600,250" class="edge data"/>
+<polyline points="610,230 570,230 570,430 200,430 200,250 198.8,250" class="edge response"/>
+<polyline points="464,110 1020,110 1020,220 1040,220" class="edge control"/>
 <polyline points="400,144 400,196" class="edge control"/>
 <g class="node normal">
 <rect x="60" y="206" width="134" height="68" rx="6" class="block module"/>
 <text x="127" y="244.0" class="block-label">Search Threads</text>
 </g>
 <g class="node normal">
-<rect x="780" y="209" width="126" height="62" rx="5" class="block fifo"/>
-<line x1="793" y1="219" x2="793" y2="261" class="symbol-line"/>
-<line x1="893" y1="219" x2="893" y2="261" class="symbol-line"/>
-<text x="843" y="244.0" class="block-label">Request FIFO</text>
+<rect x="840" y="209" width="126" height="62" rx="5" class="block fifo"/>
+<line x1="853" y1="219" x2="853" y2="261" class="symbol-line"/>
+<line x1="953" y1="219" x2="953" y2="261" class="symbol-line"/>
+<text x="903" y="244.0" class="block-label">Request FIFO</text>
 </g>
 <g class="node normal">
-<polygon points="1000,209 1106,209 1116,240 1106,271 1000,271 990,240" class="block arbiter"/>
-<text x="1053" y="244.0" class="block-label">Arbiter</text>
+<polygon points="1060,209 1166,209 1176,240 1166,271 1060,271 1050,240" class="block arbiter"/>
+<text x="1113" y="244.0" class="block-label">Arbiter</text>
 </g>
 <g class="node normal">
 <rect x="330" y="206" width="134" height="68" rx="6" class="block logic"/>
@@ -91,31 +91,32 @@
 <text x="397" y="374.0" class="block-label">TT Storage</text>
 </g>
 <g class="node normal">
-<rect x="550" y="206" width="134" height="68" rx="5" class="block fifo"/>
-<line x1="563" y1="216" x2="563" y2="264" class="symbol-line"/>
-<line x1="671" y1="216" x2="671" y2="264" class="symbol-line"/>
-<text x="617" y="244.0" class="block-label">Response FIFO</text>
+<rect x="610" y="206" width="134" height="68" rx="5" class="block fifo"/>
+<line x1="623" y1="216" x2="623" y2="264" class="symbol-line"/>
+<line x1="731" y1="216" x2="731" y2="264" class="symbol-line"/>
+<text x="677" y="244.0" class="block-label">Response FIFO</text>
 </g>
 <g class="node normal">
 <rect x="330" y="76" width="134" height="68" rx="12" class="block fsm"/>
 <text x="397" y="114.0" class="block-label">TT Control</text>
 </g>
-<polygon points="769,235.5 780,230 769,224.5" class="arrowhead data bus"/>
-<polygon points="980,265 990,260 980,255" class="arrowhead data"/>
+<polygon points="829,235.5 840,230 829,224.5" class="arrowhead data bus"/>
+<polygon points="1040,265 1050,260 1040,255" class="arrowhead data"/>
 <polygon points="474,225 464,230 474,235" class="arrowhead data"/>
 <polygon points="375,326 380,336 385,326" class="arrowhead data"/>
 <polygon points="415,284 410,274 405,284" class="arrowhead response"/>
-<polygon points="540,255 550,250 540,245" class="arrowhead data"/>
-<polygon points="204,245 194,250 204,255" class="arrowhead response"/>
-<polygon points="980,225 990,220 980,215" class="arrowhead control"/>
+<polygon points="600,255 610,250 600,245" class="arrowhead data"/>
+<polygon points="198.8,247.6 194,250 198.8,252.4" class="arrowhead response"/>
+<polygon points="1040,225 1050,220 1040,215" class="arrowhead control"/>
 <polygon points="395,196 400,206 405,196" class="arrowhead control"/>
-<rect x="439.0" y="154.0" width="92.0" height="18.0" rx="5" class="edge-label-bg"/>
-<text x="485.0" y="166.0" class="edge-label data">TT request · 96b</text>
-<rect x="335.0" y="297.0" width="37.0" height="18.0" rx="5" class="edge-label-bg"/>
-<text x="353.5" y="309.0" class="edge-label data">entry</text>
-<rect x="418.0" y="303.0" width="56.2" height="18.0" rx="5" class="edge-label-bg"/>
-<text x="446.1" y="315.0" class="edge-label response">read data</text>
-<polyline points="487,250 487,282 474,282" class="label-leader"/>
-<rect x="419.9" y="282.0" width="62.2" height="18.0" rx="5" class="edge-label-bg"/>
-<text x="451.0" y="294.0" class="edge-label data">hit / score</text>
+<rect x="457.0" y="298.0" width="92.0" height="18.0" rx="5" class="edge-label-bg"/>
+<text x="503.0" y="310.0" class="edge-label data">TT request · 96b</text>
+<rect x="335.0" y="309.0" width="37.0" height="18.0" rx="5" class="edge-label-bg"/>
+<text x="353.5" y="321.0" class="edge-label data">entry</text>
+<polyline points="410,330 472,330" class="label-leader"/>
+<rect x="472.0" y="321.0" width="56.2" height="18.0" rx="5" class="edge-label-bg"/>
+<text x="500.1" y="333.0" class="edge-label response">read data</text>
+<polyline points="513,250 513,258" class="label-leader"/>
+<rect x="481.9" y="258.0" width="62.2" height="18.0" rx="5" class="edge-label-bg"/>
+<text x="513.0" y="270.0" class="edge-label data">hit / score</text>
 </svg>

@@ -3,6 +3,13 @@ import unittest
 from support import NNUE_JSON, renderer
 
 
+def route_length(route):
+    return sum(
+        abs(start.x - end.x) + abs(start.y - end.y)
+        for start, end in zip(route, route[1:])
+    )
+
+
 class LayoutTests(unittest.TestCase):
     def test_ports_remain_exactly_on_block_boundaries(self):
         boxes = [
@@ -86,7 +93,31 @@ class LayoutTests(unittest.TestCase):
         self.assertLess(width, 1800)
         self.assertGreater(height, 250)
 
-    def test_nnue_layout_and_routes_remain_compact_and_direct(self):
+    def test_dense_group_reflow_aligns_shared_support_with_consumers(self):
+        boxes = [
+            renderer.Box(f"stage_{i}", f"Stage {i}", "module", i, 1, group="g")
+            for i in range(renderer.FOLD_ROW_THRESHOLD)
+        ]
+        support = renderer.Box("control", "Control", "fsm", 5, 0, group="g")
+        boxes.append(support)
+        edges = [
+            renderer.Edge(f"stage_{i}", f"stage_{i + 1}")
+            for i in range(renderer.FOLD_ROW_THRESHOLD - 1)
+        ]
+        edges.extend(
+            [
+                renderer.Edge("control", "stage_4", kind="control"),
+                renderer.Edge("control", "stage_5", kind="control"),
+            ]
+        )
+
+        renderer.layout_boxes(boxes, edges)
+
+        self.assertEqual(boxes[4].cx, boxes[5].cx)
+        self.assertLessEqual(abs(support.cx - boxes[4].cx), renderer.ROUTE_STEP)
+        self.assertLess(support.y, boxes[4].y)
+
+    def test_nnue_bridge_placement_and_routes_are_compact(self):
         title, boxes, edges, groups, warnings = renderer.load_diagram(NNUE_JSON)
         width, height = renderer.layout_boxes(boxes, edges)
         routes, route_warnings = renderer.route_edges(edges, boxes, width, height)
@@ -95,179 +126,96 @@ class LayoutTests(unittest.TestCase):
             (edge.source, edge.target): route
             for edge, route in zip(edges, routes)
         }
-        edge_index_by_endpoints = {
-            (edge.source, edge.target): i for i, edge in enumerate(edges)
-        }
 
         self.assertEqual([], warnings)
         self.assertEqual([], route_warnings)
-        eval_gap = by_id["eval_memory"].left - by_id["eval_in"].right
-        self.assertLessEqual(eval_gap, renderer.COL_GAP + 30)
+        self.assertLessEqual(width, 1650)
+        self.assertGreaterEqual(height, 900)
+        self.assertLessEqual(height, 1050)
 
-        thread_read = route_by_endpoints[("eval_in", "eval_memory")]
-        side_to_move = route_by_endpoints[("eval_in", "activation")]
-        self.assertLess(thread_read[0].x, by_id["eval_in"].right)
-        self.assertLess(side_to_move[0].x, by_id["eval_in"].right)
-        self.assertTrue(renderer._point_on_boundary(thread_read[0], by_id["eval_in"]))
-        self.assertTrue(renderer._point_on_boundary(side_to_move[0], by_id["eval_in"]))
-        self.assertGreater(side_to_move[0].y, thread_read[0].y)
-        self.assertEqual(2, len(thread_read), thread_read)
-        self.assertEqual(thread_read[0].y, thread_read[1].y)
-
-        def perpendicular_crossing(route_a, route_b):
-            for a1, a2 in zip(route_a, route_a[1:]):
-                for b1, b2 in zip(route_b, route_b[1:]):
-                    if a1.y == a2.y and b1.x == b2.x:
-                        if (
-                            min(a1.x, a2.x) <= b1.x <= max(a1.x, a2.x)
-                            and min(b1.y, b2.y) <= a1.y <= max(b1.y, b2.y)
-                        ):
-                            return True
-                    if a1.x == a2.x and b1.y == b2.y:
-                        if (
-                            min(b1.x, b2.x) <= a1.x <= max(b1.x, b2.x)
-                            and min(a1.y, a2.y) <= b1.y <= max(a1.y, a2.y)
-                        ):
-                            return True
-            return False
-
-        self.assertFalse(perpendicular_crossing(thread_read, side_to_move))
-
-        mirrored_write = route_by_endpoints[("lane_update", "eval_memory")]
-        self.assertLessEqual(len(mirrored_write), 5, mirrored_write)
-        self.assertFalse(
-            perpendicular_crossing(
-                mirrored_write,
-                route_by_endpoints[("eval_control", "activation")],
-            )
+        update_bottom = max(
+            box.bottom for box in boxes if box.group == "update"
         )
-        self.assertFalse(
-            perpendicular_crossing(
-                mirrored_write,
-                route_by_endpoints[("eval_control", "weight_rows")],
-            )
+        evaluation_top = min(
+            box.top for box in boxes if box.group == "eval"
         )
-
-        partial_to_tree = route_by_endpoints[("partial_regs", "upper_tree")]
-        self.assertEqual(2, len(partial_to_tree), partial_to_tree)
-        self.assertTrue(
-            partial_to_tree[0].x == partial_to_tree[1].x
-            or partial_to_tree[0].y == partial_to_tree[1].y
-        )
-
-        bias_to_update = route_by_endpoints[("accumulator_bias", "lane_update")]
-        self.assertEqual(2, len(bias_to_update), bias_to_update)
-        self.assertEqual(bias_to_update[0].x, bias_to_update[1].x)
-
-        update_to_mirror = route_by_endpoints[("lane_update", "update_memory")]
-        mirror_to_update = route_by_endpoints[("update_memory", "lane_update")]
-        self.assertEqual(2, len(update_to_mirror), update_to_mirror)
-        self.assertEqual(2, len(mirror_to_update), mirror_to_update)
-        self.assertNotEqual(update_to_mirror[0].y, mirror_to_update[0].y)
-        self.assertFalse(perpendicular_crossing(update_to_mirror, mirror_to_update))
-
-        update_done = route_by_endpoints[("lane_update", "update_done")]
-        self.assertEqual(2, len(update_done), update_done)
-        self.assertEqual(update_done[0].x, update_done[1].x)
-        update_done_length = sum(
-            abs(start.x - end.x) + abs(start.y - end.y)
-            for start, end in zip(update_done, update_done[1:])
-        )
+        state_boxes = [box for box in boxes if box.group == "state"]
+        self.assertTrue(all(box.top > update_bottom for box in state_boxes))
+        self.assertTrue(all(box.bottom < evaluation_top for box in state_boxes))
         self.assertLessEqual(
-            update_done_length, renderer.ROW_GAP + renderer.ROUTE_STEP
-        )
-        self.assertLessEqual(
-            abs(by_id["lane_update"].cx - by_id["update_done"].cx),
+            max(box.cy for box in state_boxes) - min(box.cy for box in state_boxes),
             renderer.ROUTE_STEP,
         )
 
-        sequencer_to_state = route_by_endpoints[("eval_control", "eval_memory")]
-        local_top = min(by_id["eval_control"].top, by_id["eval_memory"].top)
-        local_bottom = max(by_id["eval_control"].bottom, by_id["eval_memory"].bottom)
-        self.assertGreaterEqual(min(point.y for point in sequencer_to_state), local_top)
-        self.assertLessEqual(max(point.y for point in sequencer_to_state), local_bottom)
-        self.assertLessEqual(len(sequencer_to_state), 4, sequencer_to_state)
-        self.assertEqual(2, len(sequencer_to_state), sequencer_to_state)
-        self.assertEqual(sequencer_to_state[0].x, sequencer_to_state[1].x)
-
-        sequencer_to_activation = route_by_endpoints[("eval_control", "activation")]
-        self.assertLessEqual(len(sequencer_to_activation), 4, sequencer_to_activation)
-        self.assertEqual(2, len(sequencer_to_activation), sequencer_to_activation)
-        self.assertFalse(perpendicular_crossing(side_to_move, sequencer_to_activation))
-
-        sequencer_to_weights = route_by_endpoints[("eval_control", "weight_rows")]
-        weights_to_products = route_by_endpoints[("weight_rows", "products")]
-        self.assertEqual(2, len(sequencer_to_weights), sequencer_to_weights)
-        self.assertEqual(sequencer_to_weights[0].y, sequencer_to_weights[1].y)
-        self.assertEqual(2, len(weights_to_products), weights_to_products)
-        self.assertEqual(weights_to_products[0].x, weights_to_products[1].x)
-
-        self.assertLessEqual(width, 1700)
-        self.assertGreater(height, 950)
-        self.assertLessEqual(height, 1150)
-        self.assertGreater(by_id["upper_tree"].y, by_id["partial_regs"].y)
-        self.assertLess(by_id["running_sum"].x, by_id["upper_tree"].x)
-        self.assertLess(by_id["score_clip"].x, by_id["running_sum"].x)
-        self.assertLess(by_id["weight_rows"].bottom, by_id["products"].top)
+        lengths = [route_length(route) for route in routes]
+        crossing_count = sum(
+            len(renderer.perpendicular_route_crossings(left, right))
+            for left_index, left in enumerate(routes)
+            for right in routes[left_index + 1:]
+        )
+        bend_count = sum(max(0, len(route) - 2) for route in routes)
+        self.assertLessEqual(sum(lengths), 7450)
+        self.assertLessEqual(max(lengths), 1400)
+        self.assertLessEqual(sum(length > 600 for length in lengths), 4)
+        self.assertLessEqual(crossing_count, 8)
+        self.assertLessEqual(bend_count, 33)
         self.assertLessEqual(
-            abs(by_id["weight_rows"].cx - by_id["products"].cx),
+            abs(by_id["snapshot"].cx - by_id["lane_update"].cx),
+            250,
+        )
+        self.assertLess(by_id["acc_bias"].bottom, by_id["lane_update"].top)
+        self.assertLessEqual(
+            abs(by_id["acc_bias"].cx - by_id["lane_update"].cx),
             renderer.ROUTE_STEP,
         )
         self.assertLess(
-            by_id["output_bias"].top - by_id["running_sum"].bottom,
-            renderer.ROW_GAP + 20,
+            route_by_endpoints[("bucket", "out_bias")][0].y,
+            route_by_endpoints[("bucket", "weight_rows")][0].y,
         )
-        group_lefts = {
-            group_id: left
-            for group_id, _, left, _, _, _ in renderer.group_rects(boxes, groups)
-        }
-        self.assertEqual(group_lefts["update"], group_lefts["evaluation"])
+        for left_index, left_route in enumerate(routes):
+            for right_route in routes[left_index + 1:]:
+                self.assertEqual(
+                    0,
+                    renderer.collinear_route_overlap_length(
+                        left_route, right_route
+                    ),
+                )
 
-        placements, label_warnings = renderer.place_edge_labels(
-            title,
-            boxes,
-            edges,
-            routes,
-            renderer.group_rects(boxes, groups),
-            width,
-            height,
-        )
-        self.assertEqual([], label_warnings)
+        for endpoints in (
+            ("update_state", "lane_update"),
+            ("lane_update", "update_state"),
+            ("snapshot", "reorder_clip"),
+            ("weight_rows", "mac"),
+            ("mac", "partials"),
+            ("out_bias", "sum_tree"),
+            ("sum_tree", "result_reg"),
+        ):
+            self.assertEqual(2, len(route_by_endpoints[endpoints]), endpoints)
+
+        self.assertLess(by_id["sum_tree"].y, by_id["result_reg"].y)
+        self.assertGreater(by_id["result_reg"].x, by_id["score_clip"].x)
+        self.assertGreater(by_id["score_clip"].x, by_id["result"].x)
+
+        grects = renderer.group_rects(boxes, groups)
         group_bounds = {
             group_id: (left, top, left + group_width, top + group_height)
-            for group_id, _, left, top, group_width, group_height
-            in renderer.group_rects(boxes, groups)
+            for group_id, _, left, top, group_width, group_height in grects
         }
-        for edge, placement in zip(edges, placements):
-            if placement is None:
-                continue
-            source_group = by_id[edge.source].group
-            if source_group and source_group == by_id[edge.target].group:
-                self.assertTrue(
-                    renderer._rect_contains(
-                        group_bounds[source_group],
-                        placement.rect,
-                        renderer.LABEL_GROUP_INSET,
-                    ),
-                    (edge.source, edge.target, placement.rect),
-                )
+        self.assertFalse(
+            renderer._rects_overlap(group_bounds["update"], group_bounds["state"])
+        )
+        self.assertFalse(
+            renderer._rects_overlap(group_bounds["state"], group_bounds["eval"])
+        )
 
-        shifted_leaders = [
-            placement
-            for placement in placements
-            if placement is not None
-            and placement.leader_start is not None
-            and abs(placement.leader_start.x - placement.x) >= renderer.ROUTE_STEP
-        ]
-        self.assertTrue(shifted_leaders)
-        for endpoints in (("products", "partial_regs"), ("partial_regs", "upper_tree")):
-            placement = placements[edge_index_by_endpoints[endpoints]]
-            self.assertIsNotNone(placement)
-            self.assertFalse(
-                renderer._rects_overlap(
-                    placement.rect, renderer._box_rect(by_id["partial_regs"], 6)
-                )
-            )
+        placements, label_warnings = renderer.place_edge_labels(
+            title, boxes, edges, routes, grects, width, height
+        )
+        self.assertEqual([], label_warnings)
+        geometry_warnings = renderer.lint_geometry(
+            boxes, edges, routes, placements, title, grects, width
+        )
+        self.assertEqual([], geometry_warnings)
 
     def test_render_leaves_whitespace_below_title(self):
         title, boxes, edges, groups, warnings = renderer.load_diagram(NNUE_JSON)

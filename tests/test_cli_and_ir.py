@@ -6,7 +6,15 @@ import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
-from support import EXAMPLE_JSON, EXAMPLE_SVG, RENDERER_PATH, render_example, renderer
+from support import (
+    EXAMPLE_JSON,
+    EXAMPLE_SVG,
+    NNUE_SVG,
+    RENDERER_PATH,
+    render_example,
+    render_nnue_example,
+    renderer,
+)
 
 
 class CliAndIrTests(unittest.TestCase):
@@ -15,6 +23,13 @@ class CliAndIrTests(unittest.TestCase):
 
         self.assertEqual([], warnings)
         self.assertEqual(EXAMPLE_SVG.read_text(encoding="utf-8"), actual)
+        ET.fromstring(actual)
+
+    def test_checked_in_nnue_showcase_is_current_and_lints_cleanly(self):
+        actual, warnings = render_nnue_example()
+
+        self.assertEqual([], warnings)
+        self.assertEqual(NNUE_SVG.read_text(encoding="utf-8"), actual)
         ET.fromstring(actual)
 
     def test_cli_renders_from_an_arbitrary_working_directory(self):

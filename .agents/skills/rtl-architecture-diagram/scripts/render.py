@@ -9,15 +9,38 @@ No third-party packages are required.
 from __future__ import annotations
 
 import argparse
+import bisect
 import heapq
+import itertools
 import json
 import math
 import sys
 from collections import defaultdict
-from dataclasses import dataclass
 from html import escape
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
+
+# `render.py` is deliberately importable by file path as well as executable.
+# File-path imports do not add this directory to sys.path, so make the sibling
+# internal package available in both supported entry modes.
+_SCRIPT_DIR = Path(__file__).resolve().parent
+if str(_SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_DIR))
+
+from rtl_diagram.geometry import (
+    Rect,
+    box_rect as _box_rect,
+    rect_contains as _rect_contains,
+    rects_overlap as _rects_overlap,
+    segment_intersects_rect as _segment_intersects_rect,
+    segments_intersect as _segments_intersect,
+)
+from rtl_diagram.model import Box, DiagramError, Edge, LabelPlacement, Point
+from rtl_diagram.metrics import (
+    collinear_route_overlap_length,
+    perpendicular_route_crossings,
+    route_quality_score,
+)
 
 
 BLOCK_KINDS = {
@@ -70,97 +93,6 @@ BLOCK_FONT_SIZE = {"normal": float(FONT), "bigger": 15.0, "smaller": 13.0}
 SUBTITLE_FONT_SIZE = {
     "normal": float(SMALL_FONT), "bigger": 11.5, "smaller": 10.5,
 }
-
-
-# ---------------------------------------------------------------------------
-# Data model
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class Box:
-    id: str
-    label: str
-    kind: str
-    col: int
-    row: int
-    subtitle: str = ""
-    group: Optional[str] = None
-    w: int = 140
-    h: int = 64
-    x: int = 0
-    y: int = 0
-    prominence: str = "normal"
-    size_explicit: bool = False
-
-    @property
-    def left(self) -> int:
-        return self.x
-
-    @property
-    def right(self) -> int:
-        return self.x + self.w
-
-    @property
-    def top(self) -> int:
-        return self.y
-
-    @property
-    def bottom(self) -> int:
-        return self.y + self.h
-
-    @property
-    def cx(self) -> int:
-        return self.x + self.w // 2
-
-    @property
-    def cy(self) -> int:
-        return self.y + self.h // 2
-
-
-@dataclass
-class Edge:
-    source: str
-    target: str
-    source_port: str = ""
-    target_port: str = ""
-    label: str = ""
-    width: Optional[int] = None
-    kind: str = "data"
-    from_side: Optional[str] = None
-    to_side: Optional[str] = None
-    via: str = "auto"
-
-
-@dataclass(frozen=True)
-class Point:
-    x: int
-    y: int
-
-
-@dataclass(frozen=True)
-class LabelPlacement:
-    x: float
-    y: float
-    width: float
-    height: float = LABEL_HEIGHT
-    leader_start: Optional[Point] = None
-    leader_end: Optional[Point] = None
-    fallback: bool = False
-    leader_bend: Optional[Point] = None
-
-    @property
-    def rect(self) -> Tuple[float, float, float, float]:
-        return (
-            self.x - self.width / 2,
-            self.y - 12,
-            self.x + self.width / 2,
-            self.y - 12 + self.height,
-        )
-
-
-class DiagramError(Exception):
-    pass
 
 
 # ---------------------------------------------------------------------------
@@ -403,6 +335,381 @@ def _harmonize_near_adjacent_sizes(
 def _median_int(values: Sequence[int]) -> int:
     ordered = sorted(values)
     return ordered[(len(ordered) - 1) // 2]
+
+
+def _choose_main_row(
+    members_by_row: Dict[int, List[Box]], edges: Sequence[Edge]
+) -> int:
+    """Choose the architectural datapath row, not merely the first tied row."""
+    ids_by_row = {
+        row: {box.id for box in members}
+        for row, members in members_by_row.items()
+    }
+
+    def key(row: int) -> Tuple[int, int, int, int, int]:
+        row_ids = ids_by_row[row]
+        internal_data = sum(
+            edge.kind == "data"
+            and edge.source in row_ids
+            and edge.target in row_ids
+            for edge in edges
+        )
+        incident_data = sum(
+            edge.kind == "data"
+            and (edge.source in row_ids or edge.target in row_ids)
+            for edge in edges
+        )
+        controller_count = sum(
+            box.kind in {"fsm", "arbiter"}
+            for box in members_by_row[row]
+        )
+        return (
+            -len(members_by_row[row]),
+            -internal_data,
+            -incident_data,
+            controller_count,
+            row,
+        )
+
+    return min(members_by_row, key=key)
+
+
+def _choose_fold_split(
+    main: Sequence[Box],
+    members: Sequence[Box],
+    edges: Sequence[Edge],
+    main_row: int,
+) -> int:
+    """Choose a compact fold without separating shared support hardware.
+
+    A midpoint-only fold is attractive geometrically but can strand a
+    controller or memory on the opposite return lane from half of its fanout.
+    Evaluate the few balanced cuts around the midpoint and strongly prefer a
+    cut that keeps each support block's main-row consumers together.  The
+    result remains deterministic and keeps an ordinary pipeline at the exact
+    midpoint.
+    """
+    midpoint = (len(main) + 1) // 2
+    if len(main) < 4:
+        return midpoint
+
+    main_index = {box.id: index for index, box in enumerate(main)}
+    support = [box for box in members if box.id not in main_index]
+    connected_indices: Dict[str, set[int]] = defaultdict(set)
+    for edge in edges:
+        if edge.source in main_index:
+            connected_indices[edge.target].add(main_index[edge.source])
+        if edge.target in main_index:
+            connected_indices[edge.source].add(main_index[edge.target])
+
+    low = max(2, midpoint - 1)
+    high = min(len(main) - 2, midpoint + 2)
+    best = (float("inf"), midpoint)
+    for split in range(low, high + 1):
+        score = abs(split - (len(main) - split)) * 4
+        for box in support:
+            indices = connected_indices.get(box.id, set())
+            if not indices:
+                continue
+            has_head = any(index < split for index in indices)
+            has_tail = any(index >= split for index in indices)
+            if has_head and has_tail:
+                score += 80
+            elif box.row < main_row and has_tail:
+                # A support block declared above the datapath should not be
+                # pulled below the fold merely because every consumer landed
+                # one position past a naive midpoint.
+                score += 26
+        candidate = (score, abs(split - midpoint), split)
+        if candidate < (best[0], abs(best[1] - midpoint), best[1]):
+            best = (score, split)
+    return best[1]
+
+
+def _place_interstitial_groups(
+    boxes: Sequence[Box], edges: Sequence[Edge]
+) -> None:
+    """Place small state/bridge groups in a free band between their clients.
+
+    A group that connects an upper datapath to a lower datapath is often live
+    state rather than another pipeline stage.  Leaving it on the upper row
+    forces both lower read paths to traverse most of the canvas.  When a real
+    vertical band exists, arrange that small group horizontally inside it and
+    align each member with the external blocks it actually serves.
+    """
+    by_id = {box.id: box for box in boxes}
+    members_by_group: Dict[str, List[Box]] = defaultdict(list)
+    for box in boxes:
+        if box.group:
+            members_by_group[box.group].append(box)
+
+    neighbors: Dict[str, List[Box]] = defaultdict(list)
+    for edge in edges:
+        neighbors[edge.source].append(by_id[edge.target])
+        neighbors[edge.target].append(by_id[edge.source])
+
+    for group_id, members in sorted(members_by_group.items()):
+        if not 2 <= len(members) <= 4:
+            continue
+        if not all(box.kind in {"memory", "fifo", "reg"} for box in members):
+            continue
+        external = [
+            other
+            for box in members
+            for other in neighbors.get(box.id, [])
+            if other.group != group_id
+        ]
+        if not external:
+            continue
+        group_center = sum(box.cy for box in members) / len(members)
+        upper = [box for box in external if box.cy < group_center]
+        lower = [box for box in external if box.cy > group_center]
+        if not upper or not lower:
+            continue
+        upper_group_ids = {box.group for box in upper if box.group}
+        lower_group_ids = {box.group for box in lower if box.group}
+        upper_scope = [
+            box for box in boxes if box.group in upper_group_ids
+        ] or upper
+        lower_scope = [
+            box for box in boxes if box.group in lower_group_ids
+        ] or lower
+        upper_bottom = max(box.bottom for box in upper_scope)
+        lower_top = min(box.top for box in lower_scope)
+        tallest = max(box.h for box in members)
+        if lower_top - upper_bottom < tallest + 2 * GROUP_PAD + ROUTE_CLEAR:
+            continue
+
+        center_y = _snap((upper_bottom + lower_top) / 2)
+        desired: Dict[str, float] = {}
+        for box in members:
+            connected = [
+                other
+                for other in neighbors.get(box.id, [])
+                if other.group != group_id
+            ]
+            if connected:
+                # Repeated architectural connections intentionally carry
+                # weight here (for example read + response around one state
+                # memory), so use the list rather than a de-duplicated set.
+                desired[box.id] = sum(other.cx for other in connected) / len(connected)
+            else:
+                desired[box.id] = box.cx
+
+        ordered = sorted(members, key=lambda box: (desired[box.id], box.id))
+        compact_gap = 2 * ROUTE_CLEAR
+        packed_width = (
+            sum(box.w for box in ordered)
+            + compact_gap * max(0, len(ordered) - 1)
+        )
+        target_center = sum(desired.values()) / len(desired)
+        cursor = max(MARGIN_X, _snap(target_center - packed_width / 2))
+        for box in ordered:
+            box.y = int(center_y - box.h / 2)
+            box.x = _snap(cursor)
+            cursor = box.right + compact_gap
+
+
+def _reflow_dense_groups(
+    boxes: Sequence[Box], edges: Sequence[Edge]
+) -> None:
+    """Lay out dense datapaths as compact proximity graphs.
+
+    Semantic columns still define pipeline order, but a dense group is not
+    forced to consume one panoramic row.  Cross-group consumers can pull an
+    early stage toward the hardware feeding it, the forward path occupies a
+    compact upper lane, and the result path returns beneath it.  Support
+    hardware is then aligned from actual connectivity rather than nominal
+    column number.
+    """
+    by_id = {box.id: box for box in boxes}
+    members_by_group: Dict[str, List[Box]] = defaultdict(list)
+    for box in boxes:
+        if box.group:
+            members_by_group[box.group].append(box)
+
+    links: Dict[str, List[Tuple[Box, Edge]]] = defaultdict(list)
+    for edge in edges:
+        links[edge.source].append((by_id[edge.target], edge))
+        links[edge.target].append((by_id[edge.source], edge))
+
+    for group_id, members in sorted(members_by_group.items()):
+        members_by_row: Dict[int, List[Box]] = defaultdict(list)
+        for box in members:
+            members_by_row[box.row].append(box)
+        main_row = _choose_main_row(members_by_row, edges)
+        main = sorted(members_by_row[main_row], key=lambda box: (box.col, box.id))
+        if len(main) < FOLD_ROW_THRESHOLD:
+            continue
+
+        split = (len(main) + 1) // 2
+        head = main[:split]
+        tail = main[split:]
+        head_center_y = _snap(min(box.cy for box in head))
+        head_top = min(box.top for box in head)
+        gap = DENSE_COL_GAP
+
+        cursor = MARGIN_X
+        previous: Optional[Box] = None
+        for box in head:
+            if previous is not None:
+                cursor = previous.right + gap
+                external_centers = [
+                    other.cx
+                    for other, _ in links.get(box.id, [])
+                    if other.group != group_id
+                ]
+                if external_centers:
+                    target_center = _median_int(
+                        [previous.cx, *external_centers]
+                    )
+                    target_left = int(round(target_center - box.w / 2))
+                    cursor = max(
+                        cursor,
+                        min(target_left, cursor + 4 * COL_GAP),
+                    )
+            box.x = _snap(cursor)
+            box.y = int(head_center_y - box.h / 2)
+            previous = box
+
+        tail_height = max(box.h for box in tail)
+        tail_center_y = _snap(
+            max(box.bottom for box in head) + ROW_GAP + tail_height / 2
+        )
+        first_tail = tail[0]
+        first_tail.x = int(round(head[-1].cx - first_tail.w / 2))
+        first_tail.y = int(tail_center_y - first_tail.h / 2)
+        previous = first_tail
+        for box in tail[1:]:
+            connecting_labels = [
+                edge_label_text(edge)
+                for edge in edges
+                if {edge.source, edge.target} == {previous.id, box.id}
+                and edge_label_text(edge)
+            ]
+            label_gap = max(
+                (
+                    min(
+                        COL_GAP + 40,
+                        _ceil_snap(estimate_edge_label_width(label) + 30),
+                    )
+                    for label in connecting_labels
+                ),
+                default=0,
+            )
+            tail_gap = max(gap, label_gap)
+            box.x = _snap(previous.left - tail_gap - box.w)
+            box.y = int(tail_center_y - box.h / 2)
+            previous = box
+
+        main_ids = {box.id for box in main}
+        upper_support: List[Tuple[float, Box]] = []
+        lower_support: List[Tuple[float, Box]] = []
+        for box in members:
+            if box.id in main_ids:
+                continue
+            main_links = [
+                (other, edge)
+                for other, edge in links.get(box.id, [])
+                if other.id in main_ids
+            ]
+            if not main_links:
+                desired_center = box.cx
+            elif box.kind in {"memory", "fifo"}:
+                data_links = [
+                    (other, edge)
+                    for other, edge in main_links
+                    if edge.kind == "data"
+                ]
+                anchors = data_links or main_links
+                desired_center = sum(other.cx for other, _ in anchors) / len(anchors)
+                tail_consumers = [
+                    other
+                    for other, _ in data_links
+                    if other in tail
+                ]
+                if len(tail_consumers) == 1:
+                    consumer = tail_consumers[0]
+                    blocked_above = any(
+                        head_box.left - ROUTE_CLEAR < consumer.right
+                        and head_box.right + ROUTE_CLEAR > consumer.left
+                        for head_box in head
+                    )
+                    if blocked_above:
+                        # A support memory directly above the first return
+                        # stage would hide behind the head-stage occupying that
+                        # column. Put it beside its consumer instead, producing
+                        # the short connection a human drafter would choose.
+                        box.x = _ceil_snap(consumer.right + 2 * ROUTE_CLEAR)
+                        box.y = int(consumer.cy - box.h / 2)
+                        continue
+            else:
+                main_center = sum(other.cx for other, _ in main_links) / len(main_links)
+                same_group_links = [
+                    other
+                    for other, _ in links.get(box.id, [])
+                    if other.group == group_id
+                ]
+                all_center = (
+                    sum(other.cx for other in same_group_links) / len(same_group_links)
+                    if same_group_links
+                    else main_center
+                )
+                desired_center = (
+                    main_center
+                    if box.kind == "fsm"
+                    else 0.65 * main_center + 0.35 * all_center
+                )
+            target = upper_support if box.row < main_row else lower_support
+            target.append((desired_center, box))
+
+        def place_support_lane(
+            support: List[Tuple[float, Box]], upper: bool
+        ) -> None:
+            if not support:
+                return
+            ordered = sorted(support, key=lambda item: (item[0], item[1].col, item[1].id))
+            lane_height = max(box.h for _, box in ordered)
+            lane_center = _snap(
+                head_top - ROW_GAP - lane_height / 2
+                if upper
+                else max(box.bottom for box in tail) + ROW_GAP + lane_height / 2
+            )
+            previous_box: Optional[Box] = None
+            for desired_center, box in ordered:
+                box.y = int(lane_center - box.h / 2)
+                candidate_x = max(
+                    MARGIN_X,
+                    int(round(desired_center - box.w / 2)),
+                )
+                if previous_box is not None:
+                    connecting_labels = [
+                        edge_label_text(edge)
+                        for edge in edges
+                        if {edge.source, edge.target}
+                        == {previous_box.id, box.id}
+                        and edge_label_text(edge)
+                    ]
+                    label_gap = max(
+                        (
+                            _ceil_snap(
+                                estimate_edge_label_width(label)
+                                + 2 * PORT_STUB
+                                + 2 * LABEL_BLOCK_CLEAR
+                            )
+                            for label in connecting_labels
+                        ),
+                        default=0,
+                    )
+                    candidate_x = max(
+                        candidate_x,
+                        previous_box.right + max(2 * ROUTE_CLEAR, label_gap),
+                    )
+                box.x = _snap(candidate_x)
+                previous_box = box
+
+        place_support_lane(upper_support, True)
+        place_support_lane(lower_support, False)
 
 
 def _infer_missing_positions(
@@ -841,7 +1148,7 @@ def layout_boxes(boxes: List[Box], edges: Optional[Sequence[Edge]] = None) -> Tu
             pair = tuple(sorted((edge.source, edge.target)))
             labeled_pair_gap[pair] = max(
                 labeled_pair_gap.get(pair, 0),
-                min(COL_GAP + 30, _ceil_snap(estimate_edge_label_width(label) + 24)),
+                estimate_edge_label_width(label),
             )
 
     clusters: Dict[str, List[Box]] = defaultdict(list)
@@ -866,10 +1173,7 @@ def layout_boxes(boxes: List[Box], edges: Optional[Sequence[Edge]] = None) -> Tu
         members_by_row: Dict[int, List[Box]] = defaultdict(list)
         for b in members:
             members_by_row[b.row].append(b)
-        main_row = min(
-            members_by_row,
-            key=lambda row: (-len(members_by_row[row]), row),
-        )
+        main_row = _choose_main_row(members_by_row, edges or ())
         main = sorted(members_by_row[main_row], key=lambda b: (b.col, b.id))
         cluster_col_gap = DENSE_COL_GAP if len(main) >= DENSE_ROW_THRESHOLD else COL_GAP
 
@@ -881,8 +1185,19 @@ def layout_boxes(boxes: List[Box], edges: Optional[Sequence[Edge]] = None) -> Tu
                 semantic_gap = min(2, max(0, b.col - last_col - 1)) * 24
                 adjacent_gap = cluster_col_gap + semantic_gap
                 if previous_main is not None:
-                    pair_label_gap = labeled_pair_gap.get(
+                    pair_label_width = labeled_pair_gap.get(
                         tuple(sorted((previous_main.id, b.id))), 0
+                    )
+                    label_padding = (
+                        24 if len(main) >= DENSE_ROW_THRESHOLD else 80
+                    )
+                    pair_label_gap = (
+                        min(
+                            COL_GAP + label_padding,
+                            _ceil_snap(pair_label_width + label_padding),
+                        )
+                        if pair_label_width
+                        else 0
                     )
                     if (
                         control_predecessors.get(previous_main.id, set())
@@ -913,7 +1228,7 @@ def layout_boxes(boxes: List[Box], edges: Optional[Sequence[Edge]] = None) -> Tu
         fold_center_y: Optional[int] = None
         fold_depth = 0
         if len(main) >= FOLD_ROW_THRESHOLD:
-            split = (len(main) + 1) // 2
+            split = _choose_fold_split(main, members, edges or (), main_row)
             head = main[:split]
             tail = main[split:]
             tail_height = max(b.h for b in tail)
@@ -978,7 +1293,66 @@ def layout_boxes(boxes: List[Box], edges: Optional[Sequence[Edge]] = None) -> Tu
             key=lambda row: (abs(row - main_row), row),
         )
         for row in auxiliary_rows:
-            ordered = sorted(members_by_row[row], key=lambda b: (b.col, b.id))
+            desired_by_id: Dict[str, float] = {}
+            row_members = members_by_row[row]
+            directly_anchored: set[str] = set()
+            for support_box in row_members:
+                main_anchors = [
+                    other
+                    for other in neighbors.get(support_box.id, [])
+                    if other.id in placed_ids and other.row == main_row
+                ]
+                if main_anchors:
+                    directly_anchored.add(support_box.id)
+                    desired_by_id[support_box.id] = sum(
+                        other.cx for other in main_anchors
+                    ) / len(main_anchors)
+
+            # A leaf such as a completion flag may connect only to another
+            # support-row block. Propagate that neighbor's datapath anchor so
+            # the leaf remains beside its producer instead of drifting to a
+            # nominal semantic column on the far side of the group.
+            unresolved = {box.id for box in row_members} - desired_by_id.keys()
+            for _ in range(len(row_members)):
+                resolved_now: Dict[str, float] = {}
+                for support_id in unresolved:
+                    connected = [
+                        other
+                        for other in neighbors.get(support_id, [])
+                        if other.id in desired_by_id
+                    ]
+                    if connected:
+                        propagated = sum(
+                            desired_by_id[other.id] for other in connected
+                        ) / len(connected)
+                        support_box = by_id[support_id]
+                        neighbor_col = sum(other.col for other in connected) / len(
+                            connected
+                        )
+                        semantic_anchor = column_anchor(support_box.col)
+                        if support_box.col > neighbor_col:
+                            propagated = max(propagated, semantic_anchor)
+                        elif support_box.col < neighbor_col:
+                            propagated = min(propagated, semantic_anchor)
+                        resolved_now[support_id] = propagated
+                if not resolved_now:
+                    break
+                desired_by_id.update(resolved_now)
+                unresolved -= resolved_now.keys()
+            for support_box in row_members:
+                desired_by_id.setdefault(
+                    support_box.id,
+                    column_anchor(support_box.col),
+                )
+            ordered = sorted(
+                row_members,
+                key=lambda b: (
+                    desired_by_id[b.id],
+                    0 if b.id in directly_anchored else 1,
+                    b.col,
+                    b.id,
+                ),
+            )
             previous: Optional[Box] = None
             previous_col: Optional[int] = None
             for b in ordered:
@@ -990,9 +1364,13 @@ def layout_boxes(boxes: List[Box], edges: Optional[Sequence[Edge]] = None) -> Tu
                 ]
                 anchors = connected_main or connected_placed
                 desired_cx = (
-                    sum(other.cx for other in anchors) / len(anchors)
-                    if anchors
-                    else column_anchor(b.col)
+                    desired_by_id[b.id]
+                    if connected_main
+                    else (
+                        sum(other.cx for other in anchors) / len(anchors)
+                        if anchors
+                        else desired_by_id[b.id]
+                    )
                 )
                 # Keep a connected support block's center exact even when its
                 # width is not a route-grid multiple. Its north/south port then
@@ -1040,7 +1418,8 @@ def layout_boxes(boxes: List[Box], edges: Optional[Sequence[Edge]] = None) -> Tu
                 if (
                     not promoted_to_upper_support
                     and folded_ids
-                    and any(other.id in folded_ids for other in anchors)
+                    and anchors
+                    and all(other.id in folded_ids for other in anchors)
                 ):
                     # A support block for the folded tail gets its own lower
                     # lane immediately beneath the return row. Place it from
@@ -1077,9 +1456,24 @@ def layout_boxes(boxes: List[Box], edges: Optional[Sequence[Edge]] = None) -> Tu
                     or previous.bottom + ROUTE_CLEAR <= b.top
                 )
                 if previous is not None and vertically_overlaps_previous and not uses_fold_shelf:
-                    prior_col = previous_col if previous_col is not None else b.col
-                    semantic_gap = min(2, max(0, b.col - prior_col - 1)) * 24
-                    x = max(x, previous.right + cluster_col_gap + semantic_gap)
+                    support_leaf_gap = (
+                        PORT_STUB + ROUTE_CLEAR
+                        if b.id not in directly_anchored
+                        else ROUTE_CLEAR
+                    )
+                    pair_label_width = labeled_pair_gap.get(
+                        tuple(sorted((previous.id, b.id))),
+                        0,
+                    )
+                    labeled_gap = (
+                        _ceil_snap(pair_label_width + 16)
+                        if pair_label_width
+                        else 0
+                    )
+                    x = max(
+                        x,
+                        previous.right + max(support_leaf_gap, labeled_gap),
+                    )
                 b.x = x
                 previous = b
                 previous_col = b.col
@@ -1107,6 +1501,15 @@ def layout_boxes(boxes: List[Box], edges: Optional[Sequence[Edge]] = None) -> Tu
                 for row, (left, right) in current_rows.items()
             }
         placed_cluster_rows.append(current_rows)
+
+    if edges:
+        # Dense datapaths and bridge-state groups influence one another. A few
+        # deterministic relaxation passes converge quickly and avoid a hard
+        # dependency on whichever group happened to be packed first.
+        _place_interstitial_groups(boxes, edges)
+        for _ in range(3):
+            _reflow_dense_groups(boxes, edges)
+            _place_interstitial_groups(boxes, edges)
 
     width = max(b.right for b in boxes) + MARGIN_X
     height = max(b.bottom for b in boxes) + MARGIN_BOTTOM
@@ -1323,15 +1726,15 @@ def astar_route(start: Point, goal: Point, boxes: Sequence[Box], width: int, hei
                 continue
             if (nx, ny) in blocked:
                 continue
-            bend = 0.0 if (pdx, pdy) in {(0, 0), (dx, dy)} else 10.0
+            bend = 0.0 if (pdx, pdy) in {(0, 0), (dx, dy)} else 12.0
             axis = "h" if dx else "v"
             occupied_axes = used_axes.get((nx, ny), set()) if used_axes is not None else set()
             # Crossing an existing route is visually more ambiguous than
             # briefly sharing its direction, so keep a much stronger penalty
             # for perpendicular occupancy. Both remain soft constraints: A*
             # may still use a congested channel when geometry leaves no choice.
-            crossing = 44.0 if occupied_axes and axis not in occupied_axes else 0.0
-            sharing = 5.0 if axis in occupied_axes else 0.0
+            crossing = 80.0 if occupied_axes and axis not in occupied_axes else 0.0
+            sharing = 15.0 if axis in occupied_axes else 0.0
             occupancy = used.get((nx, ny), 0) * 1.8 + crossing + sharing
             corridor = 0.0
             if preferred_y is not None:
@@ -1394,6 +1797,229 @@ def route_clear_of_boxes(
     return True
 
 
+def _route_candidate_score(
+    route: Sequence[Point],
+    used: Dict[Tuple[int, int], int],
+    used_axes: Dict[Tuple[int, int], set[str]],
+    preferred_y: Optional[int],
+) -> float:
+    """Score a clear orthogonal candidate by length, bends, and ambiguity."""
+    length = 0
+    occupancy = 0.0
+    for a, b in zip(route, route[1:]):
+        length += abs(a.x - b.x) + abs(a.y - b.y)
+        axis = "h" if a.y == b.y else "v"
+        if axis == "h":
+            cells = (
+                (_snap(x), _snap(a.y))
+                for x in range(
+                    _ceil_snap(min(a.x, b.x)),
+                    _floor_snap(max(a.x, b.x)) + ROUTE_STEP,
+                    ROUTE_STEP,
+                )
+            )
+        else:
+            cells = (
+                (_snap(a.x), _snap(y))
+                for y in range(
+                    _ceil_snap(min(a.y, b.y)),
+                    _floor_snap(max(a.y, b.y)) + ROUTE_STEP,
+                    ROUTE_STEP,
+                )
+            )
+        for cell in cells:
+            axes = used_axes.get(cell, set())
+            if axes and axis not in axes:
+                occupancy += 180
+            elif axis in axes:
+                occupancy += 20
+            occupancy += used.get(cell, 0) * 1.5
+    bends = max(0, len(route) - 2)
+    corridor = 0.0
+    if preferred_y is not None:
+        horizontal_ys = [
+            a.y for a, b in zip(route, route[1:]) if a.y == b.y
+        ]
+        if horizontal_ys:
+            corridor = min(abs(y - preferred_y) for y in horizontal_ys) * 0.2
+    return length + bends * 60 + occupancy + corridor
+
+
+def direct_orthogonal_route(
+    start: Point,
+    goal: Point,
+    boxes: Sequence[Box],
+    ignore: set[str],
+    width: int,
+    height: int,
+    used: Dict[Tuple[int, int], int],
+    used_axes: Dict[Tuple[int, int], set[str]],
+    preferred_y: Optional[int] = None,
+    candidate_cache: Optional[Dict[tuple, List[Tuple[tuple, List[Point]]]]] = None,
+) -> Optional[List[Point]]:
+    """Return the quietest clear route with at most two orthogonal bends.
+
+    A* is useful in genuinely obstructed fields, but allowing soft wire costs
+    to decide every connection can turn an otherwise obvious elbow into a
+    many-jog detour.  Enumerate the small set of schematic-quality elbows and
+    channels first; use A* only when none of them clears the blocks.
+    """
+    cache_key = (
+        start.x,
+        start.y,
+        goal.x,
+        goal.y,
+        tuple(sorted(ignore)),
+        width,
+        height,
+        tuple(
+            (box.id, box.left, box.top, box.right, box.bottom)
+            for box in boxes
+        ),
+    )
+    cached = candidate_cache.get(cache_key) if candidate_cache is not None else None
+    if cached is None:
+        candidates: List[List[Point]] = []
+        if start.x == goal.x or start.y == goal.y:
+            candidates.append([start, goal])
+        candidates.extend(
+            [
+                [start, Point(goal.x, start.y), goal],
+                [start, Point(start.x, goal.y), goal],
+            ]
+        )
+
+        x_channels = {
+            _snap((start.x + goal.x) / 2),
+            *(_floor_snap(box.left - ROUTE_CLEAR) for box in boxes),
+            *(_ceil_snap(box.right + ROUTE_CLEAR) for box in boxes),
+        }
+        y_channels = {
+            _snap((start.y + goal.y) / 2),
+            *(_floor_snap(box.top - ROUTE_CLEAR) for box in boxes),
+            *(_ceil_snap(box.bottom + ROUTE_CLEAR) for box in boxes),
+        }
+        for x in sorted(x_channels):
+            if ROUTE_STEP <= x <= width - ROUTE_STEP:
+                candidates.append(
+                    [start, Point(x, start.y), Point(x, goal.y), goal]
+                )
+        for y in sorted(y_channels):
+            if ROUTE_STEP <= y <= height - ROUTE_STEP:
+                candidates.append(
+                    [start, Point(start.x, y), Point(goal.x, y), goal]
+                )
+
+        cached = []
+        seen = set()
+        for candidate in candidates:
+            route = simplify_polyline(candidate)
+            signature = tuple((point.x, point.y) for point in route)
+            if signature in seen:
+                continue
+            seen.add(signature)
+            if not all(
+                a.x == b.x or a.y == b.y
+                for a, b in zip(route, route[1:])
+            ):
+                continue
+            if route_clear_of_boxes(route, boxes, ignore):
+                cached.append((signature, route))
+        if candidate_cache is not None:
+            candidate_cache[cache_key] = cached
+
+    scored = [
+        (
+            _route_candidate_score(route, used, used_axes, preferred_y),
+            signature,
+            route,
+        )
+        for signature, route in cached
+    ]
+    return min(scored, default=(0, (), None))[2]
+
+
+def _route_conflict_score(
+    route: Sequence[Point], previous_routes: Sequence[Sequence[Point]]
+) -> Tuple[int, int, int, int, Tuple[Tuple[int, int], ...]]:
+    overlap = sum(
+        collinear_route_overlap_length(route, previous)
+        for previous in previous_routes
+    )
+    crossings = sum(
+        len(perpendicular_route_crossings(route, previous))
+        for previous in previous_routes
+    )
+    length = sum(
+        abs(a.x - b.x) + abs(a.y - b.y)
+        for a, b in zip(route, route[1:])
+    )
+    bends = max(0, len(route) - 2)
+    return (
+        overlap * 200 + crossings * 300 + bends * 40,
+        crossings,
+        overlap,
+        length,
+        tuple((point.x, point.y) for point in route),
+    )
+
+
+def _deoverlap_route(
+    route: Sequence[Point],
+    previous_routes: Sequence[Sequence[Point]],
+    boxes: Sequence[Box],
+    ignore: set[str],
+) -> List[Point]:
+    """Nudge interior tracks off an already occupied collinear channel."""
+    best = list(route)
+    best_score = _route_conflict_score(best, previous_routes)
+    for _ in range(3):
+        variants: List[List[Point]] = []
+        for segment_index, (a, b) in enumerate(zip(best, best[1:])):
+            if segment_index == 0 or segment_index >= len(best) - 2:
+                continue
+            if not any(
+                collinear_route_overlap_length([a, b], previous) > 0
+                for previous in previous_routes
+            ):
+                continue
+            for offset in (
+                -ROUTE_STEP,
+                ROUTE_STEP,
+                -2 * ROUTE_STEP,
+                2 * ROUTE_STEP,
+                -3 * ROUTE_STEP,
+                3 * ROUTE_STEP,
+            ):
+                if a.x == b.x:
+                    shifted_a = Point(a.x + offset, a.y)
+                    shifted_b = Point(b.x + offset, b.y)
+                elif a.y == b.y:
+                    shifted_a = Point(a.x, a.y + offset)
+                    shifted_b = Point(b.x, b.y + offset)
+                else:
+                    continue
+                candidate = simplify_polyline(
+                    [*best[:segment_index], shifted_a, shifted_b, *best[segment_index + 2:]]
+                )
+                if route_clear_of_boxes(candidate, boxes, ignore):
+                    variants.append(candidate)
+        if not variants:
+            break
+        candidate = min(
+            variants,
+            key=lambda value: _route_conflict_score(value, previous_routes),
+        )
+        candidate_score = _route_conflict_score(candidate, previous_routes)
+        if candidate_score >= best_score:
+            break
+        best = candidate
+        best_score = candidate_score
+        if best_score[2] == 0:
+            break
+    return best
+
+
 def edge_sides(edges: List[Edge], boxes: Dict[str, Box]) -> List[Tuple[str, str]]:
     result = []
     north_control_targets = {
@@ -1431,6 +2057,16 @@ def edge_sides(edges: List[Edge], boxes: Dict[str, Box]) -> List[Tuple[str, str]
             # component's memory from the north. Approaching its east/west side
             # tends to descend through that component's controller fanout and
             # creates avoidable crossovers.
+            ts = "n"
+        if (
+            e.to_side is None
+            and e.kind in CONTROL_EDGE_KINDS
+            and tb.kind in {"memory", "fifo"}
+            and tb.cy > sb.cy + ROW_GAP
+        ):
+            # A controller selecting a memory on a lower side shelf should
+            # enter from above. Approaching the west side forces the select
+            # wire through the return datapath occupying that shelf.
             ts = "n"
         if (
             e.to_side is None
@@ -1636,14 +2272,34 @@ def route_edges(
     height: int,
     top_lane_base: int = TOP_LANE_Y,
     bottom_lane_base: Optional[int] = None,
+    *,
+    _source_port_coords: Optional[Dict[int, int]] = None,
+    _optimize_ports: bool = True,
+    _direct_cache: Optional[Dict[tuple, List[Tuple[tuple, List[Point]]]]] = None,
 ) -> Tuple[List[List[Point]], List[str]]:
     boxes = {b.id: b for b in boxes_list}
+    direct_cache = _direct_cache if _direct_cache is not None else {}
     group_members: Dict[str, List[Box]] = defaultdict(list)
     for box in boxes_list:
         if box.group:
             group_members[box.group].append(box)
     sides = edge_sides(edges, boxes)
     ports = assign_ports(edges, sides, boxes)
+    if _source_port_coords:
+        adjusted_ports = []
+        for edge_i, (p1, p2, fs, ts) in enumerate(ports):
+            if edge_i in _source_port_coords:
+                coord = _source_port_coords[edge_i]
+                p1 = (
+                    Point(p1.x, coord)
+                    if fs in {"e", "w"}
+                    else Point(coord, p1.y)
+                )
+                p1 = _rendered_boundary_point(
+                    boxes[edges[edge_i].source], fs, p1.x, p1.y
+                )
+            adjusted_ports.append((p1, p2, fs, ts))
+        ports = adjusted_ports
     used: Dict[Tuple[int, int], int] = defaultdict(int)
     used_axes: Dict[Tuple[int, int], set[str]] = defaultdict(set)
     routes: List[List[Point]] = []
@@ -1656,16 +2312,17 @@ def route_edges(
         bottom_lane_base = _snap(bottom_lane_base)
     top_count = 0
     bottom_count = 0
+    local_top_count: Dict[str, int] = defaultdict(int)
+    local_bottom_count: Dict[str, int] = defaultdict(int)
 
-    # Route main data first, then control/response. A* sees earlier routes and
-    # mildly avoids them without making diagrams balloon outward.
-    # Long datapaths claim clear channels before local wiring. Control and
-    # response links follow, using the occupancy/crossing penalties above.
+    # Establish short datapath links before longer fanout and return paths.
+    # This makes the visual backbone stable while later routes choose among
+    # the remaining quiet channels.
     order = sorted(
         range(len(edges)),
         key=lambda i: (
             {"data": 0, "clock": 1, "control": 2, "response": 3}[edges[i].kind],
-            -(
+            (
                 abs(boxes[edges[i].source].cx - boxes[edges[i].target].cx)
                 + abs(boxes[edges[i].source].cy - boxes[edges[i].target].cy)
             ),
@@ -1677,35 +2334,113 @@ def route_edges(
     for i in order:
         e = edges[i]
         p1, p2, fs, ts = ports[i]
-        s = outward(p1, fs)
-        t = outward(p2, ts)
+        source_stub = PORT_STUB if fs in {"e", "w"} else VERTICAL_PORT_STUB
+        target_stub = PORT_STUB if ts in {"e", "w"} else VERTICAL_PORT_STUB
+        if fs == "e" and ts == "w" and p1.x <= p2.x:
+            available = max(2 * ROUTE_STEP, p2.x - p1.x - ROUTE_STEP)
+            source_stub = target_stub = min(PORT_STUB, available // 2)
+        elif fs == "w" and ts == "e" and p2.x <= p1.x:
+            available = max(2 * ROUTE_STEP, p1.x - p2.x - ROUTE_STEP)
+            source_stub = target_stub = min(PORT_STUB, available // 2)
+        elif fs == "s" and ts == "n" and p1.y <= p2.y:
+            available = max(2 * ROUTE_STEP, p2.y - p1.y - ROUTE_STEP)
+            source_stub = target_stub = min(VERTICAL_PORT_STUB, available // 2)
+        elif fs == "n" and ts == "s" and p2.y <= p1.y:
+            available = max(2 * ROUTE_STEP, p1.y - p2.y - ROUTE_STEP)
+            source_stub = target_stub = min(VERTICAL_PORT_STUB, available // 2)
+        s = outward(p1, fs, source_stub)
+        t = outward(p2, ts, target_stub)
 
         via = resolved_via(e, boxes)
         used_fallback = False
         endpoint_ids = {e.source, e.target}
 
         if via == "top":
-            lane_y = top_lane_base + top_count * ROUTE_STEP
-            top_count += 1
-            first, fallback_a = astar_route(
-                s, Point(s.x, lane_y), boxes_list, width, height, endpoint_ids, used, lane_y, used_axes
+            common_group = (
+                boxes[e.source].group
+                if boxes[e.source].group == boxes[e.target].group
+                else None
             )
-            last, fallback_b = astar_route(
-                Point(t.x, lane_y), t, boxes_list, width, height, endpoint_ids, used, lane_y, used_axes
+            nearby_pair = (
+                abs(boxes[e.source].col - boxes[e.target].col) <= 2
+                and abs(boxes[e.source].cy - boxes[e.target].cy)
+                <= ROW_GAP + max(boxes[e.source].h, boxes[e.target].h)
             )
-            core = simplify_polyline(first + [Point(t.x, lane_y)] + last[1:])
-            used_fallback = fallback_a or fallback_b
+            if common_group or nearby_pair:
+                lane_y = _floor_snap(
+                    min(
+                        box.top
+                        for box in (
+                            group_members[common_group]
+                            if common_group
+                            else (boxes[e.source], boxes[e.target])
+                        )
+                    )
+                    - 2 * ROUTE_CLEAR
+                    - local_top_count[common_group or "__nearby__"] * ROUTE_STEP
+                )
+                local_top_count[common_group or "__nearby__"] += 1
+                lane_y = max(top_lane_base, lane_y)
+            else:
+                lane_y = top_lane_base + top_count * ROUTE_STEP
+                top_count += 1
+            exterior = simplify_polyline(
+                [s, Point(s.x, lane_y), Point(t.x, lane_y), t]
+            )
+            if route_clear_of_boxes(exterior, boxes_list, endpoint_ids):
+                core = exterior
+            else:
+                first, fallback_a = astar_route(
+                    s, Point(s.x, lane_y), boxes_list, width, height, endpoint_ids, used, lane_y, used_axes
+                )
+                last, fallback_b = astar_route(
+                    Point(t.x, lane_y), t, boxes_list, width, height, endpoint_ids, used, lane_y, used_axes
+                )
+                core = simplify_polyline(first + [Point(t.x, lane_y)] + last[1:])
+                used_fallback = fallback_a or fallback_b
         elif via == "bottom":
-            lane_y = bottom_lane_base + bottom_count * ROUTE_STEP
-            bottom_count += 1
-            first, fallback_a = astar_route(
-                s, Point(s.x, lane_y), boxes_list, width, height, endpoint_ids, used, lane_y, used_axes
+            common_group = (
+                boxes[e.source].group
+                if boxes[e.source].group == boxes[e.target].group
+                else None
             )
-            last, fallback_b = astar_route(
-                Point(t.x, lane_y), t, boxes_list, width, height, endpoint_ids, used, lane_y, used_axes
+            nearby_pair = (
+                abs(boxes[e.source].col - boxes[e.target].col) <= 2
+                and abs(boxes[e.source].cy - boxes[e.target].cy)
+                <= ROW_GAP + max(boxes[e.source].h, boxes[e.target].h)
             )
-            core = simplify_polyline(first + [Point(t.x, lane_y)] + last[1:])
-            used_fallback = fallback_a or fallback_b
+            if common_group or nearby_pair:
+                lane_y = _ceil_snap(
+                    max(
+                        box.bottom
+                        for box in (
+                            group_members[common_group]
+                            if common_group
+                            else (boxes[e.source], boxes[e.target])
+                        )
+                    )
+                    + 2 * ROUTE_CLEAR
+                    + local_bottom_count[common_group or "__nearby__"] * ROUTE_STEP
+                )
+                local_bottom_count[common_group or "__nearby__"] += 1
+                lane_y = min(bottom_lane_base, lane_y)
+            else:
+                lane_y = bottom_lane_base + bottom_count * ROUTE_STEP
+                bottom_count += 1
+            exterior = simplify_polyline(
+                [s, Point(s.x, lane_y), Point(t.x, lane_y), t]
+            )
+            if route_clear_of_boxes(exterior, boxes_list, endpoint_ids):
+                core = exterior
+            else:
+                first, fallback_a = astar_route(
+                    s, Point(s.x, lane_y), boxes_list, width, height, endpoint_ids, used, lane_y, used_axes
+                )
+                last, fallback_b = astar_route(
+                    Point(t.x, lane_y), t, boxes_list, width, height, endpoint_ids, used, lane_y, used_axes
+                )
+                core = simplify_polyline(first + [Point(t.x, lane_y)] + last[1:])
+                used_fallback = fallback_a or fallback_b
         else:
             cross_group_handoff = None
             source_box = boxes[e.source]
@@ -1735,6 +2470,7 @@ def route_edges(
                             y - (source_group_bottom + target_group_top) / 2
                         )
                     )
+                    clear_handoffs = []
                     for corridor_y in corridor_ys:
                         candidate = simplify_polyline(
                             [
@@ -1747,8 +2483,19 @@ def route_edges(
                         if route_clear_of_boxes(
                             candidate, boxes_list, endpoint_ids
                         ):
-                            cross_group_handoff = candidate
-                            break
+                            clear_handoffs.append((
+                                _route_candidate_score(
+                                    candidate, used, used_axes, corridor_y
+                                ),
+                                abs(
+                                    corridor_y
+                                    - (source_group_bottom + target_group_top) / 2
+                                ),
+                                tuple((point.x, point.y) for point in candidate),
+                                candidate,
+                            ))
+                    if clear_handoffs:
+                        cross_group_handoff = min(clear_handoffs)[3]
 
             # A controller directly above a nearby consumer reads best as a
             # compact, symmetric fanout in the row gap. Let A* handle longer
@@ -1763,11 +2510,26 @@ def route_edges(
                 and 0 <= t.y - s.y <= ROW_GAP + 2 * PORT_STUB
             ):
                 mid_y = _snap((s.y + t.y) / 2)
-                candidate = simplify_polyline(
-                    [s, Point(s.x, mid_y), Point(t.x, mid_y), t]
-                )
-                if route_clear_of_boxes(candidate, boxes_list, endpoint_ids):
-                    local_control = candidate
+                local_candidates = []
+                for corridor_y in range(
+                    _ceil_snap(min(s.y, t.y)),
+                    _floor_snap(max(s.y, t.y)) + ROUTE_STEP,
+                    ROUTE_STEP,
+                ):
+                    candidate = simplify_polyline(
+                        [s, Point(s.x, corridor_y), Point(t.x, corridor_y), t]
+                    )
+                    if route_clear_of_boxes(candidate, boxes_list, endpoint_ids):
+                        local_candidates.append((
+                            _route_candidate_score(
+                                candidate, used, used_axes, mid_y
+                            ),
+                            abs(corridor_y - mid_y),
+                            tuple((point.x, point.y) for point in candidate),
+                            candidate,
+                        ))
+                if local_candidates:
+                    local_control = min(local_candidates)[3]
 
             if (
                 local_control is None
@@ -1784,13 +2546,22 @@ def route_edges(
                 )
                 candidate_xs = list(range(_ceil_snap(low_x), _floor_snap(high_x) + 1, ROUTE_STEP))
                 candidate_xs.sort(key=lambda x: (abs(x - desired_x), abs(x - t.x)))
+                long_candidates = []
                 for corridor_x in candidate_xs:
                     candidate = simplify_polyline(
                         [s, Point(corridor_x, s.y), Point(corridor_x, t.y), t]
                     )
                     if route_clear_of_boxes(candidate, boxes_list, endpoint_ids):
-                        long_control = candidate
-                        break
+                        long_candidates.append((
+                            _route_candidate_score(
+                                candidate, used, used_axes, None
+                            ),
+                            abs(corridor_x - desired_x),
+                            tuple((point.x, point.y) for point in candidate),
+                            candidate,
+                        ))
+                if long_candidates:
+                    long_control = min(long_candidates)[3]
 
             preferred_y = None
             if cross_group_handoff is not None:
@@ -1833,9 +2604,24 @@ def route_edges(
                 and local_control is None
                 and long_control is None
             ):
-                core, used_fallback = astar_route(
-                    s, t, boxes_list, width, height, endpoint_ids, used, preferred_y, used_axes
+                direct = direct_orthogonal_route(
+                    s,
+                    t,
+                    boxes_list,
+                    endpoint_ids,
+                    width,
+                    height,
+                    used,
+                    used_axes,
+                    preferred_y,
+                    direct_cache,
                 )
+                if direct is not None:
+                    core = direct
+                else:
+                    core, used_fallback = astar_route(
+                        s, t, boxes_list, width, height, endpoint_ids, used, preferred_y, used_axes
+                    )
 
         if used_fallback:
             warnings.append(
@@ -1843,6 +2629,12 @@ def route_edges(
             )
 
         route = simplify_polyline([p1, s] + core[1:-1] + [t, p2])
+        route = _deoverlap_route(
+            route,
+            list(routed.values()),
+            boxes_list,
+            endpoint_ids,
+        )
         routed[i] = route
         for a, b in zip(route, route[1:]):
             if a.x == b.x:
@@ -1858,6 +2650,64 @@ def route_edges(
 
     for i in range(len(edges)):
         routes.append(routed[i])
+
+    if _optimize_ports and len(edges) > 1:
+        source_side_edges: Dict[Tuple[str, str], List[int]] = defaultdict(list)
+        base_coords: Dict[int, int] = {}
+        for edge_i, (p1, _, fs, _) in enumerate(ports):
+            source_side_edges[(edges[edge_i].source, fs)].append(edge_i)
+            base_coords[edge_i] = p1.y if fs in {"e", "w"} else p1.x
+
+        current_routes = routes
+        current_warnings = warnings
+        current_overrides = dict(_source_port_coords or {})
+        current_score = route_quality_score(current_routes, current_warnings)
+        for _ in range(2):
+            improved = False
+            for _, edge_indices in sorted(source_side_edges.items()):
+                if not 2 <= len(edge_indices) <= 4:
+                    continue
+                current_coords = tuple(
+                    current_overrides.get(edge_i, base_coords[edge_i])
+                    for edge_i in edge_indices
+                )
+                best = None
+                for permutation in sorted(set(itertools.permutations(current_coords))):
+                    if permutation == current_coords:
+                        continue
+                    trial_overrides = dict(current_overrides)
+                    for edge_i, coord in zip(edge_indices, permutation):
+                        trial_overrides[edge_i] = coord
+                    trial_routes, trial_warnings = route_edges(
+                        edges,
+                        boxes_list,
+                        width,
+                        height,
+                        top_lane_base,
+                        bottom_lane_base,
+                            _source_port_coords=trial_overrides,
+                            _optimize_ports=False,
+                            _direct_cache=direct_cache,
+                        )
+                    trial_score = route_quality_score(
+                        trial_routes, trial_warnings
+                    )
+                    if trial_score < current_score and (
+                        best is None or trial_score < best[0]
+                    ):
+                        best = (
+                            trial_score,
+                            trial_routes,
+                            trial_warnings,
+                            trial_overrides,
+                        )
+                if best is None:
+                    continue
+                current_score, current_routes, current_warnings, current_overrides = best
+                improved = True
+            if not improved:
+                break
+        routes, warnings = current_routes, current_warnings
     return routes, warnings
 
 
@@ -1876,81 +2726,6 @@ def longest_segment_mid(route: Sequence[Point]) -> Tuple[int, int, bool]:
 # ---------------------------------------------------------------------------
 # Edge-label geometry and placement
 # ---------------------------------------------------------------------------
-
-
-Rect = Tuple[float, float, float, float]
-
-
-def _box_rect(b: Box, pad: float = 0) -> Rect:
-    return (b.left - pad, b.top - pad, b.right + pad, b.bottom + pad)
-
-
-def _rects_overlap(a: Rect, b: Rect, pad: float = 0) -> bool:
-    return not (
-        a[2] + pad <= b[0]
-        or b[2] + pad <= a[0]
-        or a[3] + pad <= b[1]
-        or b[3] + pad <= a[1]
-    )
-
-
-def _rect_contains(outer: Rect, inner: Rect, inset: float = 0) -> bool:
-    return (
-        inner[0] >= outer[0] + inset
-        and inner[1] >= outer[1] + inset
-        and inner[2] <= outer[2] - inset
-        and inner[3] <= outer[3] - inset
-    )
-
-
-def _segment_intersects_rect(
-    a: Point, b: Point, rect: Rect, pad: float = 0, interior: bool = False
-) -> bool:
-    left, top, right, bottom = (
-        rect[0] - pad,
-        rect[1] - pad,
-        rect[2] + pad,
-        rect[3] + pad,
-    )
-    if a.x == b.x:
-        low, high = sorted((a.y, b.y))
-        if interior:
-            return left < a.x < right and max(low, top) < min(high, bottom)
-        return left <= a.x <= right and max(low, top) <= min(high, bottom)
-    if a.y == b.y:
-        low, high = sorted((a.x, b.x))
-        if interior:
-            return top < a.y < bottom and max(low, left) < min(high, right)
-        return top <= a.y <= bottom and max(low, left) <= min(high, right)
-    # Routes should be orthogonal. Treat a diagonal's bounding box as a
-    # conservative intersection so lint never silently accepts it.
-    segment_rect = (min(a.x, b.x), min(a.y, b.y), max(a.x, b.x), max(a.y, b.y))
-    return _rects_overlap(segment_rect, (left, top, right, bottom))
-
-
-def _segments_intersect(a: Point, b: Point, c: Point, d: Point) -> bool:
-    """Return true for crossings, touches, and collinear overlap."""
-    def orientation(p: Point, q: Point, r: Point) -> float:
-        return (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x)
-
-    def on_segment(p: Point, q: Point, r: Point) -> bool:
-        return (
-            min(p.x, r.x) <= q.x <= max(p.x, r.x)
-            and min(p.y, r.y) <= q.y <= max(p.y, r.y)
-        )
-
-    o1 = orientation(a, b, c)
-    o2 = orientation(a, b, d)
-    o3 = orientation(c, d, a)
-    o4 = orientation(c, d, b)
-    if (o1 > 0 > o2 or o2 > 0 > o1) and (o3 > 0 > o4 or o4 > 0 > o3):
-        return True
-    return (
-        (o1 == 0 and on_segment(a, c, b))
-        or (o2 == 0 and on_segment(a, d, b))
-        or (o3 == 0 and on_segment(c, a, d))
-        or (o4 == 0 and on_segment(c, b, d))
-    )
 
 
 def _point_on_boundary(p: Point, b: Box) -> bool:
@@ -2057,6 +2832,131 @@ def _leader_segments(placement: LabelPlacement) -> List[Tuple[Point, Point]]:
     return list(zip(points, points[1:]))
 
 
+def _attach_leader_to_label(placement: LabelPlacement) -> LabelPlacement:
+    """Attach a leader to the nearest clear point on any label edge."""
+    if placement.leader_start is None:
+        return placement
+    start = placement.leader_start
+    left, top, right, bottom = placement.rect
+    inset = 5
+    candidates = [
+        Point(
+            int(round(max(left + inset, min(right - inset, start.x)))),
+            int(round(top)),
+        ),
+        Point(
+            int(round(max(left + inset, min(right - inset, start.x)))),
+            int(round(bottom)),
+        ),
+        Point(
+            int(round(left)),
+            int(round(max(top + inset, min(bottom - inset, start.y)))),
+        ),
+        Point(
+            int(round(right)),
+            int(round(max(top + inset, min(bottom - inset, start.y)))),
+        ),
+    ]
+    end = min(
+        candidates,
+        key=lambda point: (
+            abs(point.x - start.x) + abs(point.y - start.y),
+            point.y,
+            point.x,
+        ),
+    )
+    bend = None
+    if start.x != end.x and start.y != end.y:
+        on_horizontal_edge = end.y in {int(round(top)), int(round(bottom))}
+        bend = (
+            Point(start.x, end.y)
+            if on_horizontal_edge
+            else Point(end.x, start.y)
+        )
+    return LabelPlacement(
+        placement.x,
+        placement.y,
+        placement.width,
+        placement.height,
+        start,
+        end,
+        placement.fallback,
+        bend,
+    )
+
+
+def _leader_route_attachments(
+    placement: LabelPlacement,
+    route: Sequence[Point],
+) -> List[LabelPlacement]:
+    """Rank useful connections between a placed label and its owning wire.
+
+    Candidate generation decides where the label belongs.  Once that decision is
+    made, the leader is free to originate on any segment of the owning route; it
+    should not remain tied to the segment position that happened to produce the
+    label candidate.  The caller can then select the first attachment that also
+    clears foreign geometry.
+    """
+    if placement.leader_start is None:
+        return [placement]
+
+    left, top, right, bottom = placement.rect
+    center_x = (left + right) / 2
+    center_y = (top + bottom) / 2
+    original = _attach_leader_to_label(placement)
+    candidates: List[LabelPlacement] = [original]
+    seen: set[Point] = {placement.leader_start}
+
+    for a, b in zip(route, route[1:]):
+        if a.y == b.y:
+            low, high = sorted((a.x, b.x))
+            start = Point(int(round(max(low, min(high, center_x)))), a.y)
+        elif a.x == b.x:
+            low, high = sorted((a.y, b.y))
+            start = Point(a.x, int(round(max(low, min(high, center_y)))))
+        else:
+            continue
+        if start in seen:
+            continue
+        seen.add(start)
+        candidates.append(_attach_leader_to_label(LabelPlacement(
+            placement.x,
+            placement.y,
+            placement.width,
+            placement.height,
+            start,
+            placement.leader_end,
+            placement.fallback,
+            placement.leader_bend,
+        )))
+
+    if not candidates:
+        return [_attach_leader_to_label(placement)]
+
+    def leader_score(candidate: LabelPlacement) -> Tuple[int, int, int, int]:
+        segments = _leader_segments(candidate)
+        length = sum(
+            abs(start.x - end.x) + abs(start.y - end.y)
+            for start, end in segments
+        )
+        return (
+            length,
+            len(segments),
+            candidate.leader_start.y if candidate.leader_start else 0,
+            candidate.leader_start.x if candidate.leader_start else 0,
+        )
+
+    return sorted(candidates, key=leader_score)
+
+
+def _attach_leader_to_route(
+    placement: LabelPlacement,
+    route: Sequence[Point],
+) -> LabelPlacement:
+    """Return the shortest route attachment, independent of other geometry."""
+    return _leader_route_attachments(placement, route)[0]
+
+
 def estimate_edge_label_width(label: str) -> float:
     """Estimate rendered 10.5px UI-font width with compact pill padding."""
     width = 0.0
@@ -2152,6 +3052,80 @@ def _label_route_congestion(
     )
 
 
+def _compile_foreign_route_segments(
+    routes: Sequence[Sequence[Point]],
+    edge_index: int,
+) -> Tuple[
+    List[int],
+    List[Tuple[int, int, int]],
+    List[int],
+    List[Tuple[int, int, int]],
+]:
+    """Flatten foreign orthogonal segments for repeated label scoring.
+
+    Each tuple is ``(horizontal, fixed_coordinate, low, high)``. Label
+    placement evaluates hundreds of thousands of candidates, so avoiding
+    Point traversal and generic rectangle construction in that inner loop is
+    material while retaining exactly the same inclusive intersection rules.
+    """
+    flattened = [
+        (
+            start.y == end.y,
+            start.y if start.y == end.y else start.x,
+            min(start.x, end.x) if start.y == end.y else min(start.y, end.y),
+            max(start.x, end.x) if start.y == end.y else max(start.y, end.y),
+        )
+        for route_index, route in enumerate(routes)
+        if route_index != edge_index
+        for start, end in zip(route, route[1:])
+    ]
+    horizontal = sorted(
+        (fixed, low, high)
+        for is_horizontal, fixed, low, high in flattened
+        if is_horizontal
+    )
+    vertical = sorted(
+        (fixed, low, high)
+        for is_horizontal, fixed, low, high in flattened
+        if not is_horizontal
+    )
+    return (
+        [fixed for fixed, _, _ in horizontal],
+        horizontal,
+        [fixed for fixed, _, _ in vertical],
+        vertical,
+    )
+
+
+def _compiled_label_route_congestion(
+    placement: LabelPlacement,
+    segments: Tuple[
+        Sequence[int],
+        Sequence[Tuple[int, int, int]],
+        Sequence[int],
+        Sequence[Tuple[int, int, int]],
+    ],
+) -> int:
+    left, top, right, bottom = placement.rect
+    left -= 18
+    top -= 18
+    right += 18
+    bottom += 18
+    horizontal_fixed, horizontal, vertical_fixed, vertical = segments
+    count = 0
+    start_index = bisect.bisect_left(horizontal_fixed, top)
+    end_index = bisect.bisect_right(horizontal_fixed, bottom)
+    for index in range(start_index, end_index):
+        _, low, high = horizontal[index]
+        count += low <= right and high >= left
+    start_index = bisect.bisect_left(vertical_fixed, left)
+    end_index = bisect.bisect_right(vertical_fixed, right)
+    for index in range(start_index, end_index):
+        _, low, high = vertical[index]
+        count += low <= bottom and high >= top
+    return count
+
+
 def place_edge_labels(
     title: str,
     boxes: Sequence[Box],
@@ -2201,6 +3175,45 @@ def place_edge_labels(
             else None
         )
         candidates = []
+        foreign_route_segments = _compile_foreign_route_segments(
+            routes, edge_index
+        )
+        route_left = min(point.x for point in route)
+        route_right = max(point.x for point in route)
+        route_top = min(point.y for point in route)
+        route_bottom = max(point.y for point in route)
+        if (
+            len(route) >= 4
+            and route_right - route_left >= text_width + 2 * LABEL_BLOCK_CLEAR
+            and route_bottom - route_top <= 2 * ROUTE_STEP
+        ):
+            # A compact dogleg between adjacent blocks often has no useful
+            # "above" or "below": both sides are occupied by those blocks.
+            # Center the pill in the inter-block channel and let its opaque
+            # background interrupt the owning wire, as a hand-drawn inline
+            # net label would.
+            inline_baselines = (
+                (route_top + route_bottom) / 2 + 4,
+                route_top - LABEL_HEIGHT + 12,
+                route_bottom + 12,
+            )
+            for inline_rank, baseline in enumerate(inline_baselines):
+                candidates.append((
+                    (
+                        0,
+                        0,
+                        inline_rank,
+                        0,
+                        -(route_right - route_left),
+                        -1,
+                        inline_rank,
+                    ),
+                    LabelPlacement(
+                        (route_left + route_right) / 2,
+                        baseline,
+                        text_width,
+                    ),
+                ))
         for segment_index, (a, b) in enumerate(zip(route, route[1:])):
             horizontal = a.y == b.y
             length = abs(a.x - b.x) + abs(a.y - b.y)
@@ -2329,25 +3342,42 @@ def place_edge_labels(
                             ))
 
         selected = None
+        congestion_cache: Dict[Rect, int] = {}
+
+        def candidate_congestion(candidate: LabelPlacement) -> int:
+            rect = candidate.rect
+            cached = congestion_cache.get(rect)
+            if cached is None:
+                cached = _compiled_label_route_congestion(
+                    candidate, foreign_route_segments
+                )
+                # Congestion is a count and therefore non-negative, so None
+                # remains an unambiguous cache-miss sentinel.
+                congestion_cache[rect] = cached
+            return cached
+
         for _, candidate in sorted(
             candidates,
             key=lambda item: (
                 item[0][0],
-                _label_route_congestion(item[1], routes, edge_index),
+                candidate_congestion(item[1]),
                 *item[0][1:],
             ),
         ):
-            if _placement_is_clear(
-                candidate,
-                obstacles,
-                routes,
-                edge_index,
-                placed,
-                width,
-                height,
-                containment,
-            ):
-                selected = candidate
+            for attachment in _leader_route_attachments(candidate, route):
+                if _placement_is_clear(
+                    attachment,
+                    obstacles,
+                    routes,
+                    edge_index,
+                    placed,
+                    width,
+                    height,
+                    containment,
+                ):
+                    selected = attachment
+                    break
+            if selected is not None:
                 break
 
         if selected is None:
@@ -2723,30 +3753,6 @@ def render(
 # ---------------------------------------------------------------------------
 
 
-def perpendicular_route_crossings(
-    route_a: Sequence[Point], route_b: Sequence[Point]
-) -> List[Point]:
-    """Return true interior crossings, excluding endpoint touches and sharing."""
-    crossings = set()
-    for a1, a2 in zip(route_a, route_a[1:]):
-        for b1, b2 in zip(route_b, route_b[1:]):
-            if (
-                a1.y == a2.y
-                and b1.x == b2.x
-                and min(a1.x, a2.x) < b1.x < max(a1.x, a2.x)
-                and min(b1.y, b2.y) < a1.y < max(b1.y, b2.y)
-            ):
-                crossings.add(Point(b1.x, a1.y))
-            elif (
-                a1.x == a2.x
-                and b1.y == b2.y
-                and min(b1.x, b2.x) < a1.x < max(b1.x, b2.x)
-                and min(a1.y, a2.y) < b1.y < max(a1.y, a2.y)
-            ):
-                crossings.add(Point(a1.x, b1.y))
-    return sorted(crossings, key=lambda point: (point.y, point.x))
-
-
 def lint_geometry(
     boxes: List[Box],
     edges: List[Edge],
@@ -2845,6 +3851,16 @@ def lint_geometry(
             if title_rect and _segment_intersects_rect(a, b, title_rect, 2):
                 warnings.append(f"edge {edge_index} crosses the diagram title")
                 title_rect = None  # Emit at most one title warning per lint pass.
+
+    for left_index, left_route in enumerate(routes):
+        for right_index, right_route in enumerate(
+            routes[left_index + 1:], left_index + 1
+        ):
+            overlap = collinear_route_overlap_length(left_route, right_route)
+            if overlap > 0:
+                warnings.append(
+                    f"edges {left_index} and {right_index} share {overlap} units of wire"
+                )
 
     if placements is None:
         return warnings

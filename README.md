@@ -37,12 +37,14 @@ Or ask naturally for an RTL architecture/datapath diagram; the skill description
 ├── assets/icon.svg          Skill icon
 ├── examples/                Small bundled smoke-test diagram
 ├── references/IR.md         Complete JSON IR reference
-└── scripts/render.py        Portable standard-library renderer and CLI
+└── scripts/
+    ├── render.py            Stable renderer CLI/import façade
+    └── rtl_diagram/         Model, geometry, and route-quality modules
 examples/                    Repository-level showcase diagrams
 tests/                       Focused CLI, IR, layout, routing, and SVG suites
 ```
 
-The renderer intentionally remains one dependency-free script so the `.agents/` directory can be copied into another repository without packaging or installation work. Its source is divided into explicit sizing, IR, layout, routing, label, SVG, and lint sections.
+The renderer remains dependency-free and self-contained under `scripts/`, so the `.agents/` directory can be copied into another repository without packaging or installation work. `render.py` remains the stable CLI/import surface; shared data types and orthogonal geometry primitives live in `scripts/rtl_diagram/`, while renderer-specific sizing, IR, layout, routing, labels, SVG, and linting remain deliberately colocated.
 
 ## Test the renderer
 
@@ -67,8 +69,12 @@ The suite checks the CLI, deterministic output, automatic and anchored semantic 
 Codex owns semantic interpretation: the diagram boundary, architectural blocks, connections, and source evidence. It emits a compact JSON IR. The renderer owns deterministic geometry, including:
 
 - automatic or anchored placement;
+- dataflow-scored primary rows, connectivity-driven support placement, and interstitial state-group placement;
 - node sizing and hardware symbols;
-- exact port attachment and orthogonal routing;
+- exact port attachment, adaptive stubs, and orthogonal routing;
+- simple elbow/channel selection before obstacle-search fallback;
+- nearest-route/nearest-boundary label leaders and post-route wire de-overlap;
+- whole-diagram crossover/bend scoring with bounded automatic port reordering;
 - collision-aware labels and geometric linting;
 - SVG styling and output.
 
@@ -85,6 +91,9 @@ The visual conventions include:
 - signal-semantic colors for data, control, clock, and response paths;
 - two-line title/subtitle wrapping and optional `bigger`/`smaller` prominence;
 - compact group-aware layout with long-row folding and support shelves;
+- bridge-state bands between vertically separated datapaths;
 - straight singleton links, clear cross-group corridors, and aligned group frames;
+- local exterior lanes for nearby feedback paths;
+- dedicated parallel tracks where routes would otherwise share a segment;
 - quiet label placement with collision-aware orthogonal leaders;
 - a centered diagram title and dependency-free UI font stack.

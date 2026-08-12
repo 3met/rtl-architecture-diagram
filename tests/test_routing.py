@@ -52,6 +52,30 @@ class RoutingTests(unittest.TestCase):
         self.assertIsNotNone(placements[0])
         self.assertLess(placements[0].x, 160)
 
+    def test_indexed_label_congestion_matches_generic_geometry(self):
+        routes = [
+            [renderer.Point(20, 40), renderer.Point(180, 40)],
+            [renderer.Point(80, 10), renderer.Point(80, 150)],
+            [
+                renderer.Point(30, 120),
+                renderer.Point(140, 120),
+                renderer.Point(140, 160),
+            ],
+        ]
+        compiled = renderer._compile_foreign_route_segments(routes, 0)
+        placements = [
+            renderer.LabelPlacement(x, y, width)
+            for x in range(20, 181, 20)
+            for y in range(20, 161, 20)
+            for width in (28, 64, 110)
+        ]
+
+        self.assertTrue(all(
+            renderer._label_route_congestion(placement, routes, 0)
+            == renderer._compiled_label_route_congestion(placement, compiled)
+            for placement in placements
+        ))
+
     def test_geometry_lint_detects_a_route_through_a_block(self):
         boxes = [
             renderer.Box("source", "Source", "module", 0, 0, x=0, y=0, w=60, h=40),
@@ -74,6 +98,26 @@ class RoutingTests(unittest.TestCase):
         crossings = renderer.perpendicular_route_crossings(*routes)
 
         self.assertEqual([renderer.Point(100, 20)], crossings)
+
+    def test_route_quality_prefers_a_detour_over_a_wire_crossover(self):
+        crossed = [
+            [renderer.Point(80, 80), renderer.Point(120, 80)],
+            [renderer.Point(100, 20), renderer.Point(100, 140)],
+        ]
+        detoured = [
+            [renderer.Point(80, 80), renderer.Point(120, 80)],
+            [
+                renderer.Point(100, 20),
+                renderer.Point(130, 20),
+                renderer.Point(130, 140),
+                renderer.Point(100, 140),
+            ],
+        ]
+
+        self.assertLess(
+            renderer.route_quality_score(detoured),
+            renderer.route_quality_score(crossed),
+        )
 
     def test_forced_exterior_route_avoids_an_intervening_block(self):
         boxes = [
@@ -165,3 +209,86 @@ class RoutingTests(unittest.TestCase):
                 and min(a.y, b.y) <= 100 <= max(a.y, b.y)
             )
             self.assertFalse(crosses_used_horizontal, route)
+
+    def test_direct_router_prefers_a_simple_elbow_before_astar(self):
+        route = renderer.direct_orthogonal_route(
+            renderer.Point(40, 40),
+            renderer.Point(180, 140),
+            [],
+            set(),
+            240,
+            200,
+            {},
+            {},
+        )
+
+        self.assertIsNotNone(route)
+        self.assertLessEqual(len(route), 3)
+        self.assertEqual(renderer.Point(40, 40), route[0])
+        self.assertEqual(renderer.Point(180, 140), route[-1])
+
+    def test_nearby_exterior_hint_uses_a_local_lane(self):
+        boxes = [
+            renderer.Box("left", "Left", "module", 0, 1),
+            renderer.Box("right", "Right", "memory", 1, 1),
+        ]
+        width, height = renderer.layout_boxes(boxes)
+        edge = renderer.Edge("right", "left", kind="response", via="bottom")
+        routes, warnings = renderer.route_edges([edge], boxes, width, height)
+
+        self.assertEqual([], warnings)
+        self.assertLessEqual(
+            max(point.y for point in routes[0]),
+            max(box.bottom for box in boxes) + 2 * renderer.ROUTE_CLEAR + renderer.ROUTE_STEP,
+        )
+        self.assertEqual([], renderer.lint_geometry(boxes, [edge], routes))
+
+    def test_label_leader_uses_nearest_label_boundary(self):
+        placement = renderer.LabelPlacement(
+            100,
+            100,
+            80,
+            leader_start=renderer.Point(200, 97),
+            leader_end=renderer.Point(100, 88),
+        )
+
+        attached = renderer._attach_leader_to_label(placement)
+
+        self.assertEqual(renderer.Point(140, 97), attached.leader_end)
+        self.assertIsNone(attached.leader_bend)
+
+    def test_label_leader_uses_nearest_point_anywhere_on_owning_route(self):
+        placement = renderer.LabelPlacement(
+            80,
+            60,
+            80,
+            leader_start=renderer.Point(0, 0),
+            leader_end=renderer.Point(40, 60),
+        )
+        route = [
+            renderer.Point(0, 0),
+            renderer.Point(0, 100),
+            renderer.Point(100, 100),
+        ]
+
+        attached = renderer._attach_leader_to_route(placement, route)
+
+        self.assertEqual(renderer.Point(80, 100), attached.leader_start)
+        self.assertEqual(renderer.Point(80, 66), attached.leader_end)
+        self.assertIsNone(attached.leader_bend)
+
+    def test_route_cleanup_removes_collinear_wire_sharing(self):
+        previous = [renderer.Point(100, 40), renderer.Point(100, 160)]
+        route = [
+            renderer.Point(20, 40),
+            renderer.Point(100, 40),
+            renderer.Point(100, 160),
+            renderer.Point(180, 160),
+        ]
+
+        cleaned = renderer._deoverlap_route(route, [previous], [], set())
+
+        self.assertEqual(
+            0,
+            renderer.collinear_route_overlap_length(cleaned, previous),
+        )
