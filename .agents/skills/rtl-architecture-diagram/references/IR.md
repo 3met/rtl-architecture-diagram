@@ -1,6 +1,6 @@
 # Diagram IR reference
 
-The renderer accepts JSON. Minimal fields are intentionally small.
+The renderer accepts a compact JSON object. Prefer defaults and add optional fields only when they improve the architectural meaning or fix an unclear render.
 
 ## Top level
 
@@ -13,6 +13,10 @@ The renderer accepts JSON. Minimal fields are intentionally small.
 }
 ```
 
+- `blocks` is required and must be non-empty.
+- `edges` and `groups` are optional arrays.
+- `title` defaults to `Architecture`.
+
 ## Block
 
 ```json
@@ -23,21 +27,21 @@ The renderer accepts JSON. Minimal fields are intentionally small.
   "subtitle": "optional short detail",
   "bigger": true,
   "group": "optional_group_id",
+  "at": [1, 0],
   "size": [160, 70]
 }
 ```
 
-- `at:[column,row]` is optional. Omit it for automatic placement. When present, it is a semantic anchor rather than a pixel position.
-- Anchored and unanchored blocks may be mixed. Explicit anchors are preserved; missing columns and rows are inferred deterministically from dataflow, block kind, group order, and nearby anchors.
-- Automatic columns follow forward `data` edges. FSMs occupy an upper control lane; one-sided or response-returning memories occupy a lower support lane, while FIFOs remain in the datapath. Parallel or cyclic nodes receive stable collision-free lanes.
-- `id` must be unique and cannot contain `.` because dots delimit endpoint port names.
-- `kind`: `module|logic|memory|fifo|mux|demux|reg|counter|fsm|arbiter|io|alu|adder|subtractor|addsub|multiplier|comparator|and|or|xor|not`.
-- `logic` is the general-purpose combinational block. Use the more specific arithmetic or gate kinds when the symbol materially improves architectural readability; do not model every RTL operator as a separate gate.
-- `adder`, `subtractor`, and `addsub` render explicit `+`, `−`, and `±` operation badges. Use `addsub` when one datapath performs a selected add/subtract operation.
-- `reg` and `counter` use a clock-input notch on the block boundary; no separate clock port hint is needed for the glyph.
-- `subtitle` may contain an explicit newline and otherwise wraps automatically into at most two balanced lines when needed. Keep it concise.
-- `bigger` / `smaller`: optional booleans that increase or decrease visual prominence through automatic size, type, and outline weight. They are mutually exclusive. Omit both for normal importance.
-- `size` is optional `[width,height]` in SVG units; omit unless auto-size is inadequate. An explicit size fixes geometry, while `bigger` or `smaller` can still affect type and outline emphasis.
+- `id` is required and unique. Do not use `.` because dots delimit endpoint port names.
+- `label` defaults to `id`.
+- `kind` defaults to `module`. Choose from `module`, `logic`, `memory`, `fifo`, `mux`, `demux`, `reg`, `counter`, `fsm`, `arbiter`, `io`, `alu`, `adder`, `subtractor`, `addsub`, `multiplier`, `comparator`, `and`, `or`, `xor`, and `not`.
+- `subtitle` adds a short second-level description.
+- `group` places the block in a visual enclosure declared under `groups`.
+- `at:[column,row]` anchors semantic order and lane, not pixels. Omit it for automatic placement. Anchored and automatic blocks may be mixed, but two anchors cannot share a position.
+- `bigger` and `smaller` are optional booleans for architectural prominence. Never set both.
+- `size:[width,height]` fixes the SVG-unit dimensions. Omit it unless automatic sizing is inadequate; both values must exceed 20.
+
+Use `logic` for generic combinational behavior. Use a specific arithmetic or gate kind only when its symbol helps explain the architecture.
 
 ## Edge
 
@@ -54,21 +58,19 @@ The renderer accepts JSON. Minimal fields are intentionally small.
 }
 ```
 
-Only `from` and `to` are required. Endpoint suffixes such as `.out` are optional semantic port names; node IDs are the portion before the first dot. Port names are not drawn and do not prescribe visual order. The renderer orders shared-side ports from destination geometry, using port names only as a deterministic final tie-break.
+- `from` and `to` are required and must name existing block IDs.
+- Optional endpoint suffixes such as `.out` are semantic port names. They are not displayed and do not control port order.
+- `label` defaults to empty.
+- `width` is an optional positive integer. Values greater than one render as a bus and add an `Nb` width annotation when useful.
+- `kind` is `data` (default), `control`, `response`, or `clock`.
+- `from_side` and `to_side` may be `n`, `s`, `e`, or `w`. Normally omit them; use them only when the attachment side matters.
+- `via` is `auto` (default), `top`, or `bottom`. Use an exterior route only after automatic routing produces an unclear result.
 
-- `kind`: `data` (default), `control`, `response`, `clock`.
-- Wire styling follows `kind`: blue data, dashed amber control, teal response/return, and dotted purple clock. Bus width changes stroke weight, not color meaning.
-- `width`: positive integer. Widths greater than one use thicker bus notation, and the renderer appends `Nb` to the label when useful.
-- `from_side` / `to_side`: `n|s|e|w`; normally omit and let geometry infer them.
-- `via`: `auto` (default), `top`, or `bottom`. Use only to correct a difficult route. Exterior routes remain obstacle-checked.
-
-The renderer places edge labels in clear space, favors the quieter portion of a route, and adds a short orthogonal leader when needed. After placing the label, it chooses the closest useful attachment point anywhere on the owning route and the nearest clear point on any side of the label boundary; it may use a compact elbow when needed. Arrows and other label leaders are obstacles, so they cannot cross a leader. A label whose endpoints share a group remains inset within that group enclosure. Shorten labels or change the semantic layout if strict lint cannot find a collision-free position.
-
-Automatic routing is orthogonal and obstacle-aware. It establishes short datapath links first, scores simple elbows and channels before falling back to obstacle search, heavily penalizes true perpendicular crossovers, assigns a smaller cost to every bend, and nudges later routes onto parallel tracks instead of allowing positive-length wire sharing. A bounded whole-diagram improvement pass swaps automatically assigned multi-output port positions, reroutes each candidate, and retains only swaps that improve the combined crossover, bend, overlap, and length score. It aligns singleton ports when that preserves a straight connection, gives bent arrows a clear final approach, and keeps short backward control/response links local. A state handoff from an upper group to a lower state memory uses the open inter-group corridor and enters the memory from the north, avoiding lower-group controller fanout. Port endpoints lie on the visible node geometry rather than only its rectangular bounds, including curved I/O terminals. Arrow shafts end at the base of separately drawn broad arrowheads, preventing the shaft from showing through the point. Use `via` only when the semantic layout still needs an explicit exterior lane.
+Keep endpoint port names consistent when several edges share a logical interface. Let the renderer choose their visual ordering.
 
 ## Validation
 
-Run `render.py ... --lint --strict` before delivery. Strict mode writes the SVG but returns exit status 1 when any architectural, routing, endpoint, or label warning remains; revise the JSON IR and render again.
+Run `render.py ... --lint --strict` before delivery. Strict mode writes the SVG but returns exit status 1 when any warning remains. Revise the JSON and render again until it passes.
 
 ## Groups
 
@@ -81,17 +83,12 @@ A block can carry `"group":"frontend"`. Optionally define its visible label:
 ]
 ```
 
-Groups are visual enclosures only; they do not change connectivity.
+Group IDs must be unique. Groups are visual enclosures and do not change connectivity. Declare every used group to avoid lint warnings.
 
 ## Layout conventions
 
-- Prefer automatic placement. Add `at` only to express an intentional order, parallel lane, or component relationship that connectivity and block kinds cannot establish.
-- Main datapath: row 1 or 2, increasing columns.
-- Columns express semantic order, not a fixed global x-coordinate. Each group selects its primary row from member count and data-edge centrality, so a tied control/support row cannot displace the real datapath. Dense groups then reflow from connectivity into a compact multi-lane proximity layout rather than being forced through a fixed fold. Cross-group inputs can pull a stage toward their source, return stages remain adjacent, and controllers/memories align to their actual consumers. A support memory may sit beside a lower return stage when placing it above would collide with a head-stage block. Connected support blocks therefore do not inherit large horizontal gaps from unrelated semantic columns. Longer titles and subtitles may wrap automatically into two balanced lines, and automatic dimensions are calculated from those visible lines. Automatically sized adjacent nodes whose width or height differs only slightly are rounded up to the same dimension; the tolerance is deliberately small and never overrides explicit `size` or a different prominence level.
-- Group enclosures whose left edges are already within one small routing interval align to the same start line by extending the inset enclosure. Larger offsets remain untouched because they may communicate intentional hierarchy.
-- Place completion/status leaf blocks near the stage that produces them. Strict lint warns when a same-group leaf connection takes a large avoidable detour around intervening hardware.
-- Control/FSM: rows above the datapath.
-- Memories/queues/support: rows below when that makes flow clearer.
-- Parallel lanes: separate rows.
-- Feedback/return paths: mark `kind:"response"`; control arcs: `kind:"control"`.
-- Do not use empty spacer blocks. Leave gaps by skipping row/column indices.
+- Prefer automatic placement.
+- Use columns for semantic progression and rows for parallel lanes when anchors are necessary.
+- Place controllers above and support memories below the datapath when that makes the flow clearer.
+- Mark feedback and return paths as `response`; mark control arcs as `control`.
+- Do not create spacer blocks or use explicit sizes and positions for cosmetic alignment.

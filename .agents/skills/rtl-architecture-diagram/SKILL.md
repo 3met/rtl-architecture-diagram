@@ -1,48 +1,36 @@
 ---
 name: rtl-architecture-diagram
-description: Create compact SVG architecture and microarchitecture diagrams from Verilog, SystemVerilog, VHDL, Chisel-generated RTL, or hardware-design code. Use for datapaths, pipelines, memories, FIFOs, arbiters, FSM/control, module hierarchy, and RTL dataflow. Do not use for gate-level schematics, PCB schematics, or timing waveforms.
+description: Create compact SVG architecture and microarchitecture diagrams from a hardware or HDL design. Use for datapaths, pipelines, memories, FIFOs, arbiters, FSM/control, module hierarchy, and RTL dataflow. Do not use for gate-level schematics, PCB schematics, or timing waveforms.
 ---
 
 # RTL architecture diagrams
 
-Produce a compact hardware-architecture SVG with the bundled deterministic renderer. **Never hand-author Mermaid, PlantUML, Graphviz, or SVG unless the user explicitly asks for that format.**
+Produce a compact hardware-architecture SVG with the bundled deterministic renderer. Do not substitute Mermaid, PlantUML, Graphviz, or hand-authored SVG unless the user explicitly requests that format.
 
 ## Workflow
 
-1. Establish the requested view boundary and top module. If the scope is ambiguous, choose the most likely boundary and state the assumption.
-2. Inspect only the RTL needed for that scope. Trace instantiations and architecturally relevant data/control paths, keeping a compact source-evidence map for major blocks and connections.
+1. Establish the requested view boundary and top module. If ambiguous, choose the most likely scope and state the assumption.
+2. Inspect the relevant design sources. Trace instantiations and the data/control paths needed to support each major block and connection.
 3. Choose the abstraction before drawing. Show semantic hardware units, not literal RTL statements.
 4. Write `<name>.diagram.json` using the compact IR below. Normally omit `at` and let the renderer infer semantic ranks and lanes. Add `at:[column,row]` only as an architectural anchor; never use pixel coordinates.
-5. Run:
+5. Render and validate it:
    `python <skill-dir>/scripts/render.py <name>.diagram.json -o <name>.svg --lint --strict`
-6. Resolve every warning by correcting the JSON IR or shortening labels. Do not hand-edit generated SVG geometry.
-7. Inspect the rendered SVG visually when an image/browser viewer is available and re-render until clear.
-8. Re-check every major block and connection against the source-evidence map. Identify any inference or uncertainty explicitly.
-9. Return both JSON and SVG unless the user asks for only one, plus a short list of the main RTL source files used.
-10. For README or other Markdown previews, embed the generated SVG path directly, for example `![Datapath](docs/datapath.svg)`. Do not rasterize it merely to obtain a preview. Chat/agent surfaces that accept local image references can likewise display the SVG file directly; rasterize only when the destination cannot render SVG.
+6. Resolve every warning in the JSON and re-render. Do not edit generated SVG geometry.
+7. Inspect the SVG visually when possible and correct unclear abstraction, labels, or flow.
+8. Return the JSON and SVG unless the user requests otherwise. Name the main source files used and identify any inference or uncertainty.
 
 ## Abstraction rules
 
-- Prefer <=25 blocks and <=45 edges per diagram. Split large designs hierarchically.
+- Keep each diagram focused; split large designs into hierarchical views.
 - Show memories, FIFOs/queues, arbiters, major muxes, functional units, important controllers/FSMs, and meaningful pipeline boundaries.
 - Collapse trivial combinational logic, assigns, constants, reset plumbing, ordinary registers, and implementation-only decode.
 - Use primitive gate kinds only for architecturally meaningful gates. This skill is not intended to expand a design into a gate-level netlist.
-- Aggregate related signals into one named interface/bus. Do not draw every `valid`, `ready`, ID, or field separately unless important to the architecture.
+- Aggregate related signals into named interfaces or buses. Draw individual handshake or field signals only when architecturally important.
 - Show bit widths only when useful. Use RTL signal/module names only when they aid traceability; prefer short architectural labels.
 - Do not invent a block or connection to make the diagram look complete. Omit uncertain detail or label it as an inference.
-- Main datapath flow is easy to follow but is not restricted to one row or a fixed fold. The primary row is selected from dataflow centrality rather than row number, then dense groups reflow as compact proximity graphs: cross-group state handoffs may pull a stage toward their source, the return path may occupy a nearby lower lane, and support memories/controllers align from actual connectivity. Put control above the datapath when practical, while a support memory for a lower return stage may sit beside its consumer when an upper placement would be blocked. Let the renderer wrap longer block titles and subtitles into at most two balanced lines and size from those rendered lines instead of forcing every block to be wide.
-- A small memory/register group that bridges vertically separated datapaths may move into the free band between them. Its members align to the clients they serve, keeping state reads and commits local without requiring cosmetic `at` edits.
 - Use `"bigger":true` or `"smaller":true` sparingly when architectural importance should change a node's visual prominence. Never set both. Omit both for normal nodes; do not use prominence merely to repair layout.
-- Keep completion tags, status outputs, and other leaf terminals near their producer instead of placing an unrelated state or memory block between them. Prefer the semantic layout with the shortest clear arrows and least total route length.
-- Use `kind:"control"` for control edges and `kind:"response"` for backwards/return paths so the renderer keeps them away from the main datapath.
-- `via:"top"` and `via:"bottom"` use a local exterior lane when the endpoints are nearby; remote feedback still uses a diagram-level exterior lane.
-- Normally omit `from_side` and `to_side`, and never encode cosmetic port order in the JSON. The renderer orders ports from destination geometry, aligns connected support blocks, and keeps clear aligned links straight. Use an explicit side only when the attachment side is architecturally meaningful.
-- Cross-component state handoffs should use the clear corridor between vertically separated group enclosures and enter a lower state memory from the north. Keep this automatic; do not add cosmetic route coordinates to the JSON.
-- Ports attach to the visible node outline, including the curved boundary of pill-shaped I/O blocks. Near-aligned group enclosure starts share an exact edge; intentionally different indentation remains distinct.
-- Arrowheads are broad schematic triangles rendered separately from their shafts. Shafts terminate at the triangle base so the line cannot project through and visually blunt the point.
-- Keep labels for internal connections inside their shared group enclosure. The renderer may attach a collision-aware orthogonal leader off-center when that produces a quieter, more compact placement; arrows and other leaders must not cross it.
-- Label leaders may attach between the nearest useful point anywhere on their owning route and the nearest clear point on any side of the label boundary. Routed wires are assigned separate parallel tracks when they would otherwise share a positive-length segment.
-- Routing scores true perpendicular crossovers much more heavily than length and gives every bend a smaller but meaningful cost. After the first route pass, the renderer tries bounded permutations of multi-output port order and keeps a swap only when it improves the weighted whole-diagram result.
+- Use `kind:"control"` for control signals and `kind:"response"` for return paths.
+- Let the renderer choose placement, port sides, and routes. Add optional layout or routing hints only when they communicate architecture or fix an unclear render.
 - Avoid crossing hierarchy boundaries unless the connection matters to the requested view.
 
 ## Compact IR
@@ -64,8 +52,6 @@ Produce a compact hardware-architecture SVG with the bundled deterministic rende
 
 Allowed block kinds: `module`, `logic`, `memory`, `fifo`, `mux`, `demux`, `reg`, `counter`, `fsm`, `arbiter`, `io`, `alu`, `adder`, `subtractor`, `addsub`, `multiplier`, `comparator`, `and`, `or`, `xor`, `not`.
 
-Multi-bit edges (`"width":N`, where `N > 1`) render as thicker bus routes and receive an `Nb` width label automatically. Data, control, response, and clock routes use distinct line colors/styles.
+Use `width` for multi-bit buses. Omit `at` to use automatic placement.
 
-`at:[column,row]` is optional. Omitted positions are inferred deterministically from dataflow, block kind, groups, and explicit anchors elsewhere in the same diagram.
-
-Use `references/IR.md` only when advanced fields (groups, explicit port sides, routing hints, subtitles) are needed.
+Read `references/IR.md` when using groups, subtitles, prominence, explicit sizing or placement, port sides, or routing hints.

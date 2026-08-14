@@ -1,6 +1,6 @@
 # RTL Architecture Diagram Codex skill
 
-A repo-local Codex skill for turning RTL into compact, deterministic SVG architecture/microarchitecture diagrams.
+A repo-local Codex skill for turning hardware or HDL designs into compact, deterministic SVG architecture diagrams.
 
 ## Example
 
@@ -10,7 +10,7 @@ The NNUE evaluator datapath is defined as semantic JSON and rendered with the bu
 
 [Diagram IR](examples/nnue-evaluator.diagram.json) · [Rendered SVG](examples/nnue-evaluator.svg)
 
-Agents and Markdown renderers that support SVG can preview the generated file directly; no PNG conversion or separate rendering step is needed:
+Markdown renderers that support SVG can preview the generated file directly:
 
 ```markdown
 ![NNUE Evaluator Datapath](examples/nnue-evaluator.svg)
@@ -18,7 +18,7 @@ Agents and Markdown renderers that support SVG can preview the generated file di
 
 ## Install
 
-Copy the included `.agents/` directory into the root of your repository. Codex discovers repo skills under `.agents/skills`.
+Copy `.agents/` into the root of your repository. Codex discovers repository skills under `.agents/skills`.
 
 Then invoke it explicitly when desired:
 
@@ -44,7 +44,7 @@ examples/                    Repository-level showcase diagrams
 tests/                       Focused CLI, IR, layout, routing, and SVG suites
 ```
 
-The renderer remains dependency-free and self-contained under `scripts/`, so the `.agents/` directory can be copied into another repository without packaging or installation work. `render.py` remains the stable CLI/import surface; shared data types and orthogonal geometry primitives live in `scripts/rtl_diagram/`, while renderer-specific sizing, IR, layout, routing, labels, SVG, and linting remain deliberately colocated.
+The renderer is dependency-free and self-contained under `scripts/`, so copying `.agents/` requires no packaging or installation step. Use `render.py` as the CLI and import entry point.
 
 ## Test the renderer
 
@@ -62,38 +62,14 @@ From the repository root, run the regression suite:
 python -m unittest discover -s tests -v
 ```
 
-The suite checks the CLI, deterministic output, automatic and anchored semantic placement, endpoint and label geometry, routing diagnostics, SVG escaping, and invalid-IR handling without installing dependencies.
+The suite covers the CLI, IR validation, deterministic layout, routing, labels, and SVG output.
 
-## Architecture
+## How it works
 
-Codex owns semantic interpretation: the diagram boundary, architectural blocks, connections, and source evidence. It emits a compact JSON IR. The renderer owns deterministic geometry, including:
+Codex extracts the diagram boundary, architectural blocks, and connections from the design source, then writes a compact JSON IR. The renderer turns that IR into deterministic layout, routing, labels, hardware symbols, and SVG.
 
-- automatic or anchored placement;
-- dataflow-scored primary rows, connectivity-driven support placement, and interstitial state-group placement;
-- node sizing and hardware symbols;
-- exact port attachment, adaptive stubs, and orthogonal routing;
-- simple elbow/channel selection before obstacle-search fallback;
-- nearest-route/nearest-boundary label leaders and post-route wire de-overlap;
-- whole-diagram crossover/bend scoring with bounded automatic port reordering;
-- collision-aware labels and geometric linting;
-- SVG styling and output.
-
-Block `at:[column,row]` values are optional. Missing ranks and lanes are inferred from connectivity, block kinds, groups, and any explicit anchors. Revise semantic JSON rather than hand-editing generated SVG coordinates.
+Block `at:[column,row]` values are optional semantic anchors. Prefer automatic placement, and revise the JSON rather than editing generated SVG geometry.
 
 ## Built-in hardware notation
 
-Supported blocks include modules, generic logic, memories, FIFOs, muxes/demuxes, registers, counters, FSMs, arbiters, I/O, ALUs, adders, subtractors, selectable add/sub units, multipliers, comparators, and meaningful AND/OR/XOR/NOT gates.
-
-The visual conventions include:
-
-- explicit arithmetic-operation badges and register clock notches;
-- thicker bus routes with shaft-safe broad arrowheads;
-- signal-semantic colors for data, control, clock, and response paths;
-- two-line title/subtitle wrapping and optional `bigger`/`smaller` prominence;
-- compact group-aware layout with long-row folding and support shelves;
-- bridge-state bands between vertically separated datapaths;
-- straight singleton links, clear cross-group corridors, and aligned group frames;
-- local exterior lanes for nearby feedback paths;
-- dedicated parallel tracks where routes would otherwise share a segment;
-- quiet label placement with collision-aware orthogonal leaders;
-- a centered diagram title and dependency-free UI font stack.
+Supported blocks include modules, logic, memories, FIFOs, muxes/demuxes, registers, counters, FSMs, arbiters, I/O, arithmetic units, comparators, and meaningful logic gates. Edge kinds distinguish data, control, response, and clock paths; multi-bit widths render as buses. See the bundled [IR reference](.agents/skills/rtl-architecture-diagram/references/IR.md) for all fields.
