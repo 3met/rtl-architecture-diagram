@@ -1459,7 +1459,7 @@ def layout_boxes(boxes: List[Box], edges: Optional[Sequence[Edge]] = None) -> Tu
                     support_leaf_gap = (
                         PORT_STUB + ROUTE_CLEAR
                         if b.id not in directly_anchored
-                        else ROUTE_CLEAR
+                        else 2 * ROUTE_CLEAR + ROUTE_STEP
                     )
                     pair_label_width = labeled_pair_gap.get(
                         tuple(sorted((previous.id, b.id))),
@@ -1899,6 +1899,10 @@ def direct_orthogonal_route(
             *(_floor_snap(box.top - ROUTE_CLEAR) for box in boxes),
             *(_ceil_snap(box.bottom + ROUTE_CLEAR) for box in boxes),
         }
+        # Offer parallel tracks up front so unrelated nets need not share the
+        # single channel at each obstacle boundary and be repaired afterward.
+        x_channels |= {x + offset for x in tuple(x_channels) for offset in (-ROUTE_STEP, ROUTE_STEP)}
+        y_channels |= {y + offset for y in tuple(y_channels) for offset in (-ROUTE_STEP, ROUTE_STEP)}
         for x in sorted(x_channels):
             if ROUTE_STEP <= x <= width - ROUTE_STEP:
                 candidates.append(
@@ -1970,8 +1974,24 @@ def _deoverlap_route(
     boxes: Sequence[Box],
     ignore: set[str],
 ) -> List[Point]:
-    """Nudge interior tracks off an already occupied collinear channel."""
+    """Nudge interior tracks to reduce sharing and crossings, keeping port stubs."""
     best = list(route)
+    def preserves_approaches(candidate: Sequence[Point]) -> bool:
+        # Moving the first/last interior track must not collapse or reverse
+        # the port stub. Otherwise an arrow can run along the block boundary.
+        for original, changed in ((route, candidate), (route[::-1], candidate[::-1])):
+            if len(changed) < 2:
+                return False
+            a, b = original[:2]
+            c, d = changed[:2]
+            dx, dy = b.x - a.x, b.y - a.y
+            nx, ny = d.x - c.x, d.y - c.y
+            if dx * nx + dy * ny <= 0 or dx * ny != dy * nx:
+                return False
+            if abs(nx) + abs(ny) < min(ROUTE_CLEAR, abs(dx) + abs(dy)):
+                return False
+        return True
+
     best_score = _route_conflict_score(best, previous_routes)
     for _ in range(3):
         variants: List[List[Point]] = []
@@ -1980,6 +2000,7 @@ def _deoverlap_route(
                 continue
             if not any(
                 collinear_route_overlap_length([a, b], previous) > 0
+                or perpendicular_route_crossings([a, b], previous)
                 for previous in previous_routes
             ):
                 continue
@@ -2002,7 +2023,7 @@ def _deoverlap_route(
                 candidate = simplify_polyline(
                     [*best[:segment_index], shifted_a, shifted_b, *best[segment_index + 2:]]
                 )
-                if route_clear_of_boxes(candidate, boxes, ignore):
+                if preserves_approaches(candidate) and route_clear_of_boxes(candidate, boxes, ignore):
                     variants.append(candidate)
         if not variants:
             break
@@ -2015,7 +2036,7 @@ def _deoverlap_route(
             break
         best = candidate
         best_score = candidate_score
-        if best_score[2] == 0:
+        if best_score[2] == 0 and best_score[1] == 0:
             break
     return best
 
@@ -3802,6 +3823,7 @@ def lint_geometry(
     title_rect = _title_rect(title, canvas_width) if title else None
     group_labels = _group_label_rects(grects)
     degree: Dict[str, int] = defaultdict(int)
+    route_sides = edge_sides(edges, by_id)
     for edge in edges:
         degree[edge.source] += 1
         degree[edge.target] += 1
@@ -3813,6 +3835,14 @@ def lint_geometry(
             warnings.append(f"edge {edge_index} does not start on block {edge.source}")
         if not _point_on_boundary(route[-1], by_id[edge.target]):
             warnings.append(f"edge {edge_index} does not end on block {edge.target}")
+        for name, endpoint, neighbor, side in (
+            ("source", route[0], route[1], route_sides[edge_index][0]),
+            ("target", route[-1], route[-2], route_sides[edge_index][1]),
+        ):
+            dx, dy = neighbor.x - endpoint.x, neighbor.y - endpoint.y
+            normal = {"e": (1, 0), "w": (-1, 0), "n": (0, -1), "s": (0, 1)}[side]
+            if dx * normal[1] != dy * normal[0] or dx * normal[0] + dy * normal[1] <= 0:
+                warnings.append(f"edge {edge_index} has an invalid {name} port approach")
 
         route_length = sum(
             abs(a.x - b.x) + abs(a.y - b.y)

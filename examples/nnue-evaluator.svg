@@ -80,18 +80,18 @@
 <polyline points="211,760 250,760 250,650 670,650 670,600 700,600" class="edge control"/>
 <polyline points="204,780 480,780" class="edge control"/>
 <polyline points="482,610 520,610 520,550 980,550 980,590 1009,590" class="edge control bus"/>
-<polyline points="482,590 490,590 490,540 1410,540 1410,885" class="edge control bus"/>
+<polyline points="482,590 500,590 500,540 1410,540 1410,885" class="edge control bus"/>
 <polyline points="560,491 560,701" class="edge data bus"/>
 <polyline points="770,497 770,520 580,520 580,701" class="edge data bus"/>
 <polyline points="625,760 689,760" class="edge data bus"/>
 <polyline points="882,780 939,780" class="edge data bus"/>
 <polyline points="1060,641 1060,694" class="edge data bus"/>
-<polyline points="879,600 920,600 920,610 1010,610" class="edge control"/>
-<polyline points="879,580 950,580 950,730" class="edge control"/>
+<polyline points="879,580 920,580 920,610 1010,610" class="edge control"/>
+<polyline points="879,600 910,600 910,740 940,740" class="edge control"/>
 <polyline points="1094,760 1159,760" class="edge data bus"/>
 <polyline points="1230,808 1230,871" class="edge data bus"/>
 <polyline points="1350,930 1324,930" class="edge data bus"/>
-<polyline points="879,620 920,620 920,830 1110,830 1110,910 1143,910" class="edge control"/>
+<polyline points="879,620 920,620 920,660 1110,660 1110,910 1143,910" class="edge control"/>
 <polyline points="1153,950 1032,950" class="edge data bus"/>
 <polyline points="880,930 822,930" class="edge data bus"/>
 <polyline points="670,930 552,930" class="edge data bus"/>
@@ -249,7 +249,7 @@
 <polygon points="939,785.5 950,780 939,774.5" class="arrowhead data bus"/>
 <polygon points="1054.5,694 1060,705 1065.5,694" class="arrowhead data bus"/>
 <polygon points="1010,615 1020,610 1010,605" class="arrowhead control"/>
-<polygon points="945,730 950,740 955,730" class="arrowhead control"/>
+<polygon points="940,745 950,740 940,735" class="arrowhead control"/>
 <polygon points="1159,765.5 1170,760 1159,754.5" class="arrowhead data bus"/>
 <polygon points="1224.5,871 1230,882 1235.5,871" class="arrowhead data bus"/>
 <polygon points="1324,924.5 1313,930 1324,935.5" class="arrowhead data bus"/>
@@ -284,9 +284,9 @@
 <polyline points="654,550 654,558" class="label-leader"/>
 <rect x="610.4" y="558.0" width="87.2" height="18.0" rx="5" class="edge-label-bg"/>
 <text x="654.0" y="570.0" class="edge-label control">head select · 4b</text>
-<polyline points="1208,540 1208,548" class="label-leader"/>
-<rect x="1194.0" y="548.0" width="28.0" height="18.0" rx="5" class="edge-label-bg"/>
-<text x="1208.0" y="560.0" class="edge-label control">4b</text>
+<polyline points="1203,540 1203,548" class="label-leader"/>
+<rect x="1189.0" y="548.0" width="28.0" height="18.0" rx="5" class="edge-label-bg"/>
+<text x="1203.0" y="560.0" class="edge-label control">4b</text>
 <polyline points="560,681 552,681" class="label-leader"/>
 <rect x="355.0" y="672.0" width="197.0" height="18.0" rx="5" class="edge-label-bg"/>
 <text x="453.5" y="684.0" class="edge-label data">multi-thread synchronous read · 2560b</text>
@@ -295,13 +295,14 @@
 <text x="685.3" y="688.0" class="edge-label data">single-thread direct snapshot · 2560b</text>
 <rect x="642.7" y="734.0" width="38.6" height="18.0" rx="5" class="edge-label-bg"/>
 <text x="662.0" y="746.0" class="edge-label data">2560b</text>
-<polyline points="916,780 916,818 895,818" class="label-leader"/>
-<rect x="739.8" y="818.0" width="160.4" height="18.0" rx="5" class="edge-label-bg"/>
-<text x="820.0" y="830.0" class="edge-label data">128 activations per cycle · 512b</text>
-<rect x="1068.0" y="665.0" width="137.2" height="18.0" rx="5" class="edge-label-bg"/>
-<text x="1136.6" y="677.0" class="edge-label data">selected weight row · 384b</text>
-<rect x="958.9" y="618.0" width="46.2" height="18.0" rx="5" class="edge-label-bg"/>
-<text x="982.0" y="630.0" class="edge-label control">row 0…3</text>
+<polyline points="916,780 916,818" class="label-leader"/>
+<rect x="775.8" y="818.0" width="160.4" height="18.0" rx="5" class="edge-label-bg"/>
+<text x="856.0" y="830.0" class="edge-label data">128 activations per cycle · 512b</text>
+<polyline points="1060,688 1052,688" class="label-leader"/>
+<rect x="914.8" y="679.0" width="137.2" height="18.0" rx="5" class="edge-label-bg"/>
+<text x="983.4" y="691.0" class="edge-label data">selected weight row · 384b</text>
+<rect x="946.9" y="618.0" width="46.2" height="18.0" rx="5" class="edge-label-bg"/>
+<text x="970.0" y="630.0" class="edge-label control">row 0…3</text>
 <rect x="1115.6" y="734.0" width="32.8" height="18.0" rx="5" class="edge-label-bg"/>
 <text x="1132.0" y="746.0" class="edge-label data">768b</text>
 <rect x="1238.0" y="837.0" width="110.8" height="18.0" rx="5" class="edge-label-bg"/>

@@ -11,6 +11,15 @@ def route_length(route):
 
 
 class LayoutTests(unittest.TestCase):
+    def test_support_siblings_leave_room_for_routing(self):
+        boxes = [renderer.Box("main", "Main", "module", 1, 1),
+                 renderer.Box("a", "A", "module", 0, 0),
+                 renderer.Box("b", "B", "module", 2, 0)]
+        edges = [renderer.Edge("a", "main"), renderer.Edge("b", "main")]
+        renderer.layout_boxes(boxes, edges)
+        left, right = sorted(boxes[1:], key=lambda box: box.x)
+        self.assertGreaterEqual(right.left - left.right, 2 * renderer.ROUTE_CLEAR + renderer.ROUTE_STEP)
+
     def test_ports_remain_exactly_on_block_boundaries(self):
         boxes = [
             renderer.Box("source", "Source block", "module", 0, 0),
@@ -157,8 +166,10 @@ class LayoutTests(unittest.TestCase):
         self.assertLessEqual(sum(lengths), 7450)
         self.assertLessEqual(max(lengths), 1400)
         self.assertLessEqual(sum(length > 600 for length in lengths), 4)
-        self.assertLessEqual(crossing_count, 8)
-        self.assertLessEqual(bend_count, 33)
+        # Preserving real port stubs costs one crossing/bend versus the old
+        # cleanup that could collapse an approach onto the block boundary.
+        self.assertLessEqual(crossing_count, 9)
+        self.assertLessEqual(bend_count, 34)
         self.assertLessEqual(
             abs(by_id["snapshot"].cx - by_id["lane_update"].cx),
             250,

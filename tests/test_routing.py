@@ -4,6 +4,45 @@ from support import renderer
 
 
 class RoutingTests(unittest.TestCase):
+    def test_lint_rejects_arrow_running_down_target_edge(self):
+        boxes = [renderer.Box("a", "A", "module", 0, 0, x=20, y=20, w=80, h=40),
+                 renderer.Box("b", "B", "module", 1, 1, x=200, y=100, w=80, h=40)]
+        edge = renderer.Edge("a", "b", from_side="e", to_side="w")
+        route = [renderer.Point(100, 40), renderer.Point(200, 40), renderer.Point(200, 120)]
+        self.assertIn("edge 0 has an invalid target port approach",
+                      renderer.lint_geometry(boxes, [edge], [route]))
+
+    def test_cleanup_preserves_port_approaches_on_every_side(self):
+        # The occupied x=100 track tempts cleanup to move to x=120,
+        # collapsing the final horizontal approach into a downward arrow.
+        base = [(20, 40), (100, 40), (100, 160), (120, 160)]
+        for rotation in range(4):
+            for reverse in (False, True):
+                def transform(x, y):
+                    for _ in range(rotation):
+                        x, y = -y, x
+                    return renderer.Point(x + 240, y + 240)
+                route = [transform(x, y) for x, y in base]
+                if reverse:
+                    route.reverse()
+                previous = [transform(100, 40), transform(100, 160)]
+                with self.subTest(rotation=rotation, reverse=reverse):
+                    cleaned = renderer._deoverlap_route(route, [previous], [], set())
+                    self.assertEqual(0, renderer.collinear_route_overlap_length(cleaned, previous))
+                    for old, new in ((route, cleaned), (route[::-1], cleaned[::-1])):
+                        dx, dy = old[1].x - old[0].x, old[1].y - old[0].y
+                        nx, ny = new[1].x - new[0].x, new[1].y - new[0].y
+                        self.assertEqual(0, dx * ny - dy * nx)
+                        self.assertGreater(dx * nx + dy * ny, 0)
+                        self.assertGreaterEqual(abs(nx) + abs(ny), renderer.ROUTE_CLEAR)
+
+    def test_cleanup_can_remove_a_crossing_without_wire_sharing(self):
+        route = [renderer.Point(20, 40), renderer.Point(100, 40),
+                 renderer.Point(100, 160), renderer.Point(180, 160)]
+        previous = [renderer.Point(90, 100), renderer.Point(110, 100)]
+        cleaned = renderer._deoverlap_route(route, [previous], [], set())
+        self.assertEqual([], renderer.perpendicular_route_crossings(cleaned, previous))
+
     def test_long_edge_label_is_placed_clear_of_blocks(self):
         boxes = [
             renderer.Box("source", "Source", "module", 0, 0),
