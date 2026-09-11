@@ -129,7 +129,26 @@ class LayoutTests(unittest.TestCase):
     def test_nnue_bridge_placement_and_routes_are_compact(self):
         title, boxes, edges, groups, warnings = renderer.load_diagram(NNUE_JSON)
         width, height = renderer.layout_boxes(boxes, edges)
-        routes, route_warnings = renderer.route_edges(edges, boxes, width, height)
+        grects = renderer.group_rects(boxes, groups)
+        original_state_width = next(
+            group_width
+            for group_id, _, _, _, group_width, _ in grects
+            if group_id == "state"
+        )
+        grects = renderer._expand_groups_for_label_clearance(
+            grects, boxes, edges, width
+        )
+        group_label_rects = renderer._group_label_rects(grects, boxes, edges)
+        routes, route_warnings = renderer.route_edges(
+            edges,
+            boxes,
+            width,
+            height,
+            obstacle_rects=[
+                *group_label_rects,
+                renderer._title_rect(title, width),
+            ],
+        )
         by_id = {box.id: box for box in boxes}
         route_by_endpoints = {
             (edge.source, edge.target): route
@@ -166,10 +185,10 @@ class LayoutTests(unittest.TestCase):
         self.assertLessEqual(sum(lengths), 7450)
         self.assertLessEqual(max(lengths), 1400)
         self.assertLessEqual(sum(length > 600 for length in lengths), 4)
-        # Preserving real port stubs costs one crossing/bend versus the old
-        # cleanup that could collapse an approach onto the block boundary.
+        # Preserving full port stubs and keeping the state heading clear can
+        # require one extra schematic bend versus a squeezed endpoint route.
         self.assertLessEqual(crossing_count, 9)
-        self.assertLessEqual(bend_count, 34)
+        self.assertLessEqual(bend_count, 35)
         self.assertLessEqual(
             abs(by_id["snapshot"].cx - by_id["lane_update"].cx),
             250,
@@ -182,6 +201,25 @@ class LayoutTests(unittest.TestCase):
         self.assertLess(
             route_by_endpoints[("bucket", "out_bias")][0].y,
             route_by_endpoints[("bucket", "weight_rows")][0].y,
+        )
+        self.assertEqual(
+            [],
+            renderer.perpendicular_route_crossings(
+                route_by_endpoints[("eval_ctrl", "mac")],
+                route_by_endpoints[("eval_ctrl", "sum_tree")],
+            ),
+        )
+        state_width = next(
+            group_width
+            for group_id, _, _, _, group_width, _ in grects
+            if group_id == "state"
+        )
+        mirror_route = route_by_endpoints[("lane_update", "eval_mirror")]
+        self.assertGreater(state_width, original_state_width)
+        self.assertEqual(by_id["eval_mirror"].top, mirror_route[-1].y)
+        self.assertEqual(mirror_route[-2].x, mirror_route[-1].x)
+        self.assertGreaterEqual(
+            abs(mirror_route[-2].y - mirror_route[-1].y), 11
         )
         for left_index, left_route in enumerate(routes):
             for right_route in routes[left_index + 1:]:
@@ -207,7 +245,6 @@ class LayoutTests(unittest.TestCase):
         self.assertGreater(by_id["result_reg"].x, by_id["score_clip"].x)
         self.assertGreater(by_id["score_clip"].x, by_id["result"].x)
 
-        grects = renderer.group_rects(boxes, groups)
         group_bounds = {
             group_id: (left, top, left + group_width, top + group_height)
             for group_id, _, left, top, group_width, group_height in grects
@@ -220,11 +257,25 @@ class LayoutTests(unittest.TestCase):
         )
 
         placements, label_warnings = renderer.place_edge_labels(
-            title, boxes, edges, routes, grects, width, height
+            title,
+            boxes,
+            edges,
+            routes,
+            grects,
+            width,
+            height,
+            group_label_rects,
         )
         self.assertEqual([], label_warnings)
         geometry_warnings = renderer.lint_geometry(
-            boxes, edges, routes, placements, title, grects, width
+            boxes,
+            edges,
+            routes,
+            placements,
+            title,
+            grects,
+            width,
+            group_label_rects,
         )
         self.assertEqual([], geometry_warnings)
 

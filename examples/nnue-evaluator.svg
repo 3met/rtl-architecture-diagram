@@ -33,6 +33,7 @@
     .group.group-2{fill:#fff7ed;stroke:#fdba74}
     .group.group-3{fill:#faf5ff;stroke:#d8b4fe}
     .group-label{font:650 13px Inter,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;fill:#334155}
+    .group-label-bg{fill:#fff;fill-opacity:.96}
     .edge{fill:none;stroke:#475569;stroke-width:1.6;stroke-linejoin:round;stroke-linecap:butt}
     .edge.data{stroke:#2563eb}
     .edge.bus{stroke-width:3}
@@ -56,11 +57,8 @@
 <rect x="0" y="0" width="1540" height="1050" class="bg"/>
 <text x="770.0" y="32" class="title">NNUE evaluator hardware architecture (current RTL)</text>
 <rect x="38" y="57" width="1033" height="310" rx="10" class="group group-0"/>
-<text x="48" y="74" class="group-label">Incremental accumulator update path</text>
-<rect x="478" y="371" width="417" height="148" rx="10" class="group group-1"/>
-<text x="488" y="388" class="group-label">Per-thread live state</text>
+<rect x="378" y="371" width="617" height="148" rx="10" class="group group-1"/>
 <rect x="38" y="527" width="1460" height="473" rx="10" class="group group-2"/>
-<text x="48" y="544" class="group-label">Four-cycle output evaluation path</text>
 <rect x="367" y="249" width="145" height="96" rx="4" class="memory-shadow"/>
 <rect x="713" y="103" width="145" height="68" rx="4" class="memory-shadow"/>
 <rect x="677" y="410" width="203" height="94" rx="4" class="memory-shadow"/>
@@ -76,8 +74,8 @@
 <polyline points="740,345 740,392" class="edge data bus"/>
 <polyline points="670,320 630,320 630,370 570,370 570,398" class="edge data bus"/>
 <polyline points="531,120 570,120 570,80 870,80 870,120 897,120" class="edge response"/>
-<polyline points="204,740 240,740 240,600 299,600" class="edge data bus"/>
-<polyline points="211,760 250,760 250,650 670,650 670,600 700,600" class="edge control"/>
+<polyline points="204,740 270,740 270,600 299,600" class="edge data bus"/>
+<polyline points="211,760 280,760 280,650 670,650 670,600 700,600" class="edge control"/>
 <polyline points="204,780 480,780" class="edge control"/>
 <polyline points="482,610 520,610 520,550 980,550 980,590 1009,590" class="edge control bus"/>
 <polyline points="482,590 500,590 500,540 1410,540 1410,885" class="edge control bus"/>
@@ -86,12 +84,12 @@
 <polyline points="625,760 689,760" class="edge data bus"/>
 <polyline points="882,780 939,780" class="edge data bus"/>
 <polyline points="1060,641 1060,694" class="edge data bus"/>
-<polyline points="879,580 920,580 920,610 1010,610" class="edge control"/>
-<polyline points="879,600 910,600 910,740 940,740" class="edge control"/>
+<polyline points="879,590 920,590 920,610 1010,610" class="edge control"/>
+<polyline points="879,610 910,610 910,740 940,740" class="edge control"/>
 <polyline points="1094,760 1159,760" class="edge data bus"/>
 <polyline points="1230,808 1230,871" class="edge data bus"/>
 <polyline points="1350,930 1324,930" class="edge data bus"/>
-<polyline points="879,620 920,620 920,660 1110,660 1110,910 1143,910" class="edge control"/>
+<polyline points="790,634 790,650 900,650 900,830 1110,830 1110,910 1143,910" class="edge control"/>
 <polyline points="1153,950 1032,950" class="edge data bus"/>
 <polyline points="880,930 822,930" class="edge data bus"/>
 <polyline points="670,930 552,930" class="edge data bus"/>
@@ -257,28 +255,34 @@
 <polygon points="1032,944.5 1021,950 1032,955.5" class="arrowhead data bus"/>
 <polygon points="822,924.5 811,930 822,935.5" class="arrowhead data bus"/>
 <polygon points="552,924.5 541,930 552,935.5" class="arrowhead data bus"/>
+<rect x="45.0" y="60.0" width="259.0" height="19.0" rx="3" class="group-label-bg"/>
+<text x="48.0" y="74.0" class="group-label">Incremental accumulator update path</text>
+<rect x="385.0" y="374.0" width="158.2" height="19.0" rx="3" class="group-label-bg"/>
+<text x="388.0" y="388.0" class="group-label">Per-thread live state</text>
+<rect x="45.0" y="530.0" width="244.6" height="19.0" rx="3" class="group-label-bg"/>
+<text x="48.0" y="544.0" class="group-label">Four-cycle output evaluation path</text>
 <polyline points="274,300 274,208" class="label-leader"/>
 <rect x="256.2" y="190.0" width="179.6" height="18.0" rx="5" class="edge-label-bg"/>
 <text x="346.0" y="202.0" class="edge-label data">White + Black feature indices · 20b</text>
-<polyline points="588,290 543,290 543,229" class="label-leader"/>
-<rect x="392.8" y="216.0" width="150.4" height="18.0" rx="5" class="edge-label-bg"/>
-<text x="468.0" y="228.0" class="edge-label data">two transformer rows · 1024b</text>
-<rect x="788.0" y="192.0" width="32.8" height="18.0" rx="5" class="edge-label-bg"/>
-<text x="804.4" y="204.0" class="edge-label data">768b</text>
+<polyline points="538,290 538,234" class="label-leader"/>
+<rect x="385.1" y="216.0" width="161.8" height="18.0" rx="5" class="edge-label-bg"/>
+<text x="466.0" y="228.0" class="edge-label data">two transformer rows · 512 × 2b</text>
+<rect x="788.0" y="192.0" width="50.0" height="18.0" rx="5" class="edge-label-bg"/>
+<text x="813.0" y="204.0" class="edge-label data">256 × 3b</text>
 <rect x="556.2" y="234.0" width="103.6" height="18.0" rx="5" class="edge-label-bg"/>
 <text x="608.0" y="246.0" class="edge-label control">enable / add / clear</text>
-<rect x="808.0" y="366.0" width="38.6" height="18.0" rx="5" class="edge-label-bg"/>
-<text x="827.3" y="378.0" class="edge-label response">2560b</text>
-<rect x="693.4" y="366.0" width="38.6" height="18.0" rx="5" class="edge-label-bg"/>
-<text x="712.7" y="378.0" class="edge-label data">2560b</text>
-<rect x="538.1" y="344.0" width="123.8" height="18.0" rx="5" class="edge-label-bg"/>
-<text x="600.0" y="356.0" class="edge-label data">mirrored commit · 2560b</text>
+<rect x="808.0" y="366.0" width="47.2" height="18.0" rx="5" class="edge-label-bg"/>
+<text x="831.6" y="378.0" class="edge-label response">512 × 5b</text>
+<rect x="684.8" y="366.0" width="47.2" height="18.0" rx="5" class="edge-label-bg"/>
+<text x="708.4" y="378.0" class="edge-label data">512 × 5b</text>
+<rect x="521.8" y="344.0" width="132.4" height="18.0" rx="5" class="edge-label-bg"/>
+<text x="588.0" y="356.0" class="edge-label data">mirrored commit · 512 × 5b</text>
 <polyline points="648,80 648,88" class="label-leader"/>
 <rect x="600.7" y="88.0" width="94.6" height="18.0" rx="5" class="edge-label-bg"/>
 <text x="648.0" y="100.0" class="edge-label response">final-request tag</text>
-<polyline points="240,600 240,592" class="label-leader"/>
-<rect x="207.4" y="574.0" width="87.2" height="18.0" rx="5" class="edge-label-bg"/>
-<text x="251.0" y="586.0" class="edge-label data">piece count · 6b</text>
+<polyline points="270,600 270,592" class="label-leader"/>
+<rect x="210.4" y="574.0" width="87.2" height="18.0" rx="5" class="edge-label-bg"/>
+<text x="254.0" y="586.0" class="edge-label data">piece count · 6b</text>
 <rect x="309.3" y="754.0" width="75.4" height="18.0" rx="5" class="edge-label-bg"/>
 <text x="347.0" y="766.0" class="edge-label control">thread + turn</text>
 <polyline points="654,550 654,558" class="label-leader"/>
@@ -288,25 +292,24 @@
 <rect x="1189.0" y="548.0" width="28.0" height="18.0" rx="5" class="edge-label-bg"/>
 <text x="1203.0" y="560.0" class="edge-label control">4b</text>
 <polyline points="560,681 552,681" class="label-leader"/>
-<rect x="355.0" y="672.0" width="197.0" height="18.0" rx="5" class="edge-label-bg"/>
-<text x="453.5" y="684.0" class="edge-label data">multi-thread synchronous read · 2560b</text>
+<rect x="346.4" y="672.0" width="205.6" height="18.0" rx="5" class="edge-label-bg"/>
+<text x="449.2" y="684.0" class="edge-label data">multi-thread synchronous read · 512 × 5b</text>
 <polyline points="580,685 588,685" class="label-leader"/>
-<rect x="588.0" y="676.0" width="194.6" height="18.0" rx="5" class="edge-label-bg"/>
-<text x="685.3" y="688.0" class="edge-label data">single-thread direct snapshot · 2560b</text>
-<rect x="642.7" y="734.0" width="38.6" height="18.0" rx="5" class="edge-label-bg"/>
-<text x="662.0" y="746.0" class="edge-label data">2560b</text>
-<polyline points="916,780 916,818" class="label-leader"/>
-<rect x="775.8" y="818.0" width="160.4" height="18.0" rx="5" class="edge-label-bg"/>
-<text x="856.0" y="830.0" class="edge-label data">128 activations per cycle · 512b</text>
-<polyline points="1060,688 1052,688" class="label-leader"/>
-<rect x="914.8" y="679.0" width="137.2" height="18.0" rx="5" class="edge-label-bg"/>
-<text x="983.4" y="691.0" class="edge-label data">selected weight row · 384b</text>
-<rect x="946.9" y="618.0" width="46.2" height="18.0" rx="5" class="edge-label-bg"/>
-<text x="970.0" y="630.0" class="edge-label control">row 0…3</text>
-<rect x="1115.6" y="734.0" width="32.8" height="18.0" rx="5" class="edge-label-bg"/>
-<text x="1132.0" y="746.0" class="edge-label data">768b</text>
-<rect x="1238.0" y="837.0" width="110.8" height="18.0" rx="5" class="edge-label-bg"/>
-<text x="1293.4" y="849.0" class="edge-label data">16 partial sums · 144b</text>
+<rect x="588.0" y="676.0" width="203.2" height="18.0" rx="5" class="edge-label-bg"/>
+<text x="689.6" y="688.0" class="edge-label data">single-thread direct snapshot · 512 × 5b</text>
+<rect x="638.4" y="734.0" width="47.2" height="18.0" rx="5" class="edge-label-bg"/>
+<text x="662.0" y="746.0" class="edge-label data">512 × 5b</text>
+<polyline points="896,780 896,818 872,818" class="label-leader"/>
+<rect x="699.2" y="818.0" width="177.6" height="18.0" rx="5" class="edge-label-bg"/>
+<text x="788.0" y="830.0" class="edge-label data">128 activations per cycle · 128 × 4b</text>
+<rect x="1068.0" y="665.0" width="151.6" height="18.0" rx="5" class="edge-label-bg"/>
+<text x="1143.8" y="677.0" class="edge-label data">selected weight row · 128 × 3b</text>
+<rect x="926.4" y="572.0" width="46.2" height="18.0" rx="5" class="edge-label-bg"/>
+<text x="949.5" y="584.0" class="edge-label control">row 0…3</text>
+<rect x="1108.4" y="734.0" width="47.2" height="18.0" rx="5" class="edge-label-bg"/>
+<text x="1132.0" y="746.0" class="edge-label data">128 × 6b</text>
+<rect x="1238.0" y="837.0" width="122.2" height="18.0" rx="5" class="edge-label-bg"/>
+<text x="1299.1" y="849.0" class="edge-label data">16 partial sums · 16 × 9b</text>
 <polyline points="1344,930 1344,886" class="label-leader"/>
 <rect x="1330.0" y="868.0" width="28.0" height="18.0" rx="5" class="edge-label-bg"/>
 <text x="1344.0" y="880.0" class="edge-label data">5b</text>

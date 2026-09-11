@@ -57,14 +57,24 @@ def render(
         grects = group_rects(boxes, groups)
 
     bottom_lane_base = _snap(max(b.bottom for b in boxes) + 30)
+    grects = _expand_groups_for_label_clearance(
+        grects, boxes, edges, width
+    )
+    group_label_rects = _group_label_rects(grects, boxes, edges)
     routes, route_warnings = route_edges(
-        edges, boxes, width, height, TOP_LANE_Y, bottom_lane_base
+        edges,
+        boxes,
+        width,
+        height,
+        TOP_LANE_Y,
+        bottom_lane_base,
+        [*group_label_rects, _title_rect(title, width)],
     )
     placements, label_warnings = place_edge_labels(
-        title, boxes, edges, routes, grects, width, height
+        title, boxes, edges, routes, grects, width, height, group_label_rects
     )
     geometry_warnings = lint_geometry(
-        boxes, edges, routes, placements, title, grects, width
+        boxes, edges, routes, placements, title, grects, width, group_label_rects
     )
     if diagnostics is not None:
         diagnostics.extend(route_warnings)
@@ -82,9 +92,8 @@ def render(
         f'<text x="{width/2:.1f}" y="{TITLE_Y}" class="title">{escape(title)}</text>',
     ]
 
-    for group_index, (_, label, x, y, w, h) in enumerate(grects):
+    for group_index, (_, _, x, y, w, h) in enumerate(grects):
         parts.append(f'<rect x="{x}" y="{y}" width="{w}" height="{h}" rx="10" class="group group-{group_index % 4}"/>')
-        parts.append(f'<text x="{x+10}" y="{y+17}" class="group-label">{escape(label)}</text>')
 
     # Memory stack shadows are behind routes, while the actual node faces stay
     # in front. An arrow approaching the rear/right side of a memory therefore
@@ -107,6 +116,16 @@ def render(
         arrowhead = svg_edge_arrowhead(e, route)
         if arrowhead:
             parts.append(arrowhead)
+    for (_, label, _, _, _, _), rect in zip(grects, group_label_rects):
+        parts.append(
+            f'<rect x="{rect[0]:.1f}" y="{rect[1]:.1f}" '
+            f'width="{rect[2]-rect[0]:.1f}" height="{rect[3]-rect[1]:.1f}" '
+            'rx="3" class="group-label-bg"/>'
+        )
+        parts.append(
+            f'<text x="{rect[0]+3:.1f}" y="{rect[1]+14:.1f}" '
+            f'class="group-label">{escape(label)}</text>'
+        )
     for e, placement in zip(edges, placements):
         rendered_label = svg_edge_label(e, placement)
         if rendered_label:
@@ -128,6 +147,7 @@ def lint_geometry(
     title: str = "",
     grects: Sequence[Tuple[str, str, int, int, int, int]] = (),
     canvas_width: Optional[int] = None,
+    group_label_rects: Optional[Sequence[Rect]] = None,
 ) -> List[str]:
     warnings = []
     ids = {b.id for b in boxes}
@@ -167,7 +187,11 @@ def lint_geometry(
     if canvas_width is None:
         canvas_width = _snap(max((b.right for b in boxes), default=MARGIN_X) + MARGIN_X)
     title_rect = _title_rect(title, canvas_width) if title else None
-    group_labels = _group_label_rects(grects)
+    group_labels = list(
+        group_label_rects
+        if group_label_rects is not None
+        else _group_label_rects(grects, boxes, edges)
+    )
     degree: Dict[str, int] = defaultdict(int)
     route_sides = edge_sides(edges, by_id)
     for edge in edges:
@@ -181,9 +205,14 @@ def lint_geometry(
             warnings.append(f"edge {edge_index} does not start on block {edge.source}")
         if not _point_on_boundary(route[-1], by_id[edge.target]):
             warnings.append(f"edge {edge_index} does not end on block {edge.target}")
+        from_side, to_side = route_sides[edge_index]
+        if edge.from_side is None:
+            from_side = _side_on_boundary(route[0], by_id[edge.source]) or from_side
+        if edge.to_side is None:
+            to_side = _side_on_boundary(route[-1], by_id[edge.target]) or to_side
         for name, endpoint, neighbor, side in (
-            ("source", route[0], route[1], route_sides[edge_index][0]),
-            ("target", route[-1], route[-2], route_sides[edge_index][1]),
+            ("source", route[0], route[1], from_side),
+            ("target", route[-1], route[-2], to_side),
         ):
             dx, dy = neighbor.x - endpoint.x, neighbor.y - endpoint.y
             normal = {"e": (1, 0), "w": (-1, 0), "n": (0, -1), "s": (0, 1)}[side]
@@ -210,6 +239,7 @@ def lint_geometry(
             )
 
         crossed = set()
+        crossed_group_labels = set()
         segments = list(zip(route, route[1:]))
         for segment_index, (a, b) in enumerate(segments):
             if a.x != b.x and a.y != b.y:
@@ -227,6 +257,15 @@ def lint_geometry(
             if title_rect and _segment_intersects_rect(a, b, title_rect, 2):
                 warnings.append(f"edge {edge_index} crosses the diagram title")
                 title_rect = None  # Emit at most one title warning per lint pass.
+            for group_label_index, group_label_rect in enumerate(group_labels):
+                if (
+                    group_label_index not in crossed_group_labels
+                    and _segment_intersects_rect(a, b, group_label_rect, 2)
+                ):
+                    warnings.append(
+                        f"edge {edge_index} crosses group label {group_label_index}"
+                    )
+                    crossed_group_labels.add(group_label_index)
 
     for left_index, left_route in enumerate(routes):
         for right_index, right_route in enumerate(
@@ -278,6 +317,15 @@ def lint_geometry(
                 break
         leader_segments = _leader_segments(placement)
         if leader_segments:
+            if any(
+                collinear_route_overlap_length(
+                    [start, end], routes[edge_index]
+                ) > 0
+                for start, end in leader_segments
+            ):
+                warnings.append(
+                    f"edge {edge_index} label leader runs along its owning edge"
+                )
             for block in boxes:
                 if any(
                     _segment_intersects_rect(
@@ -334,7 +382,7 @@ def example_json() -> str:
             {"id": "ctrl", "label": "Control", "kind": "fsm"},
         ],
         "edges": [
-            {"from": "in.out", "to": "alu.in", "label": "data", "width": 64},
+            {"from": "in.out", "to": "alu.in", "label": "data", "count": 16, "width": 4},
             {"from": "alu.mem", "to": "ram.req"},
             {"from": "ram.data", "to": "alu.data", "kind": "response"},
             {"from": "alu.out", "to": "out.in", "label": "result"},

@@ -93,10 +93,17 @@ def edge_label_text(edge: Edge) -> str:
     """Return the visible edge label, including an implicit bus width."""
     label = edge.label
     if edge.width:
-        width_text = f"{edge.width}b"
+        width_text = (
+            f"{edge.count} × {edge.width}b"
+            if edge.count
+            else f"{edge.width}b"
+        )
         if not label:
             label = width_text
-        elif width_text not in label and str(edge.width) not in label:
+        elif (
+            width_text not in label
+            and (edge.count is not None or str(edge.width) not in label)
+        ):
             label = f"{label} · {width_text}"
     return label
 

@@ -809,6 +809,13 @@ def _parse_edges(raw_edges: Sequence[object], boxes: Sequence[Box]) -> List[Edge
             not isinstance(width, int) or isinstance(width, bool) or width <= 0
         ):
             raise DiagramError(f"edge {index}: width must be a positive integer")
+        count = raw.get("count")
+        if count is not None and (
+            not isinstance(count, int) or isinstance(count, bool) or count <= 0
+        ):
+            raise DiagramError(f"edge {index}: count must be a positive integer")
+        if count is not None and width is None:
+            raise DiagramError(f"edge {index}: count requires width")
         edges.append(
             Edge(
                 source=source,
@@ -817,6 +824,7 @@ def _parse_edges(raw_edges: Sequence[object], boxes: Sequence[Box]) -> List[Edge
                 target_port=target_port,
                 label=str(raw.get("label", "")).strip(),
                 width=width,
+                count=count,
                 kind=kind,
                 from_side=from_side,
                 to_side=to_side,

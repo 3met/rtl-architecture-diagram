@@ -58,6 +58,7 @@ SVG_CSS = """
     .group.group-2{fill:#fff7ed;stroke:#fdba74}
     .group.group-3{fill:#faf5ff;stroke:#d8b4fe}
     .group-label{font:650 13px Inter,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;fill:#334155}
+    .group-label-bg{fill:#fff;fill-opacity:.96}
     .edge{fill:none;stroke:#475569;stroke-width:1.6;stroke-linejoin:round;stroke-linecap:butt}
     .edge.data{stroke:#2563eb}
     .edge.bus{stroke-width:3}
@@ -207,7 +208,7 @@ def _arrow_geometry(e: Edge, route: Sequence[Point]) -> Tuple[List[Point], List[
     segment_length = math.hypot(dx, dy)
     if segment_length == 0:
         return list(route), []
-    is_bus = bool(e.width and e.width > 1)
+    is_bus = bool(e.width and e.width * (e.count or 1) > 1)
     desired_length = 11.0 if is_bus else 10.0
     desired_half_width = 5.5 if is_bus else 5.0
     head_length = min(desired_length, segment_length * 0.8)
@@ -226,7 +227,7 @@ def _arrow_geometry(e: Edge, route: Sequence[Point]) -> Tuple[List[Point], List[
 def svg_edge_shaft(e: Edge, route: Sequence[Point]) -> str:
     shaft, _ = _arrow_geometry(e, route)
     pts = " ".join(f"{_svg_number(p.x)},{_svg_number(p.y)}" for p in shaft)
-    is_bus = bool(e.width and e.width > 1)
+    is_bus = bool(e.width and e.width * (e.count or 1) > 1)
     cls = f"edge {e.kind}" + (" bus" if is_bus else "")
     return f'<polyline points="{pts}" class="{cls}"/>'
 
@@ -236,7 +237,7 @@ def svg_edge_arrowhead(e: Edge, route: Sequence[Point]) -> str:
     if not head:
         return ""
     pts = " ".join(f"{_svg_number(p.x)},{_svg_number(p.y)}" for p in head)
-    is_bus = bool(e.width and e.width > 1)
+    is_bus = bool(e.width and e.width * (e.count or 1) > 1)
     cls = f"arrowhead {e.kind}" + (" bus" if is_bus else "")
     return f'<polygon points="{pts}" class="{cls}"/>'
 

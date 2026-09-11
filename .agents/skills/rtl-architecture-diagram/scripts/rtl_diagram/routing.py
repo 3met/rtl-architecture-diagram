@@ -31,7 +31,11 @@ def blocked_cells(boxes: Sequence[Box], ignore: set[str], width: int, height: in
         # Endpoint blocks waive only the external clearance halo. Their actual
         # interiors remain blocked so a feedback route cannot cut back through
         # its own source or target after leaving the port.
-        clearance = 0 if b.id in ignore else ROUTE_CLEAR
+        clearance = (
+            0
+            if b.id in ignore
+            else (2 if b.id.startswith("__route_obstacle_") else ROUTE_CLEAR)
+        )
         l = max(0, _floor_snap(b.left - clearance))
         r = min(width, _ceil_snap(b.right + clearance))
         t = max(0, _floor_snap(b.top - clearance))
@@ -168,11 +172,12 @@ def route_clear_of_boxes(
     for box in boxes:
         if box.id in ignore:
             continue
+        clearance = 2 if box.id.startswith("__route_obstacle_") else ROUTE_CLEAR
         rect = (
-            box.left - ROUTE_CLEAR,
-            box.top - ROUTE_CLEAR,
-            box.right + ROUTE_CLEAR,
-            box.bottom + ROUTE_CLEAR,
+            box.left - clearance,
+            box.top - clearance,
+            box.right + clearance,
+            box.bottom + clearance,
         )
         for a, b in zip(points, points[1:]):
             if _segment_intersects_rect(a, b, rect, interior=True):
@@ -185,6 +190,7 @@ def _route_candidate_score(
     used: Dict[Tuple[int, int], int],
     used_axes: Dict[Tuple[int, int], set[str]],
     preferred_y: Optional[int],
+    preferred_x: Optional[int] = None,
 ) -> float:
     """Score a clear orthogonal candidate by length, bends, and ambiguity."""
     length = 0
@@ -225,6 +231,12 @@ def _route_candidate_score(
         ]
         if horizontal_ys:
             corridor = min(abs(y - preferred_y) for y in horizontal_ys) * 0.2
+    if preferred_x is not None:
+        vertical_xs = [
+            a.x for a, b in zip(route, route[1:]) if a.x == b.x
+        ]
+        if vertical_xs:
+            corridor += min(abs(x - preferred_x) for x in vertical_xs) * 3.0
     return length + bends * 60 + occupancy + corridor
 
 
@@ -238,6 +250,7 @@ def direct_orthogonal_route(
     used: Dict[Tuple[int, int], int],
     used_axes: Dict[Tuple[int, int], set[str]],
     preferred_y: Optional[int] = None,
+    preferred_x: Optional[int] = None,
     candidate_cache: Optional[Dict[tuple, List[Tuple[tuple, List[Point]]]]] = None,
 ) -> Optional[List[Point]]:
     """Return the quietest clear route with at most two orthogonal bends.
@@ -296,6 +309,42 @@ def direct_orthogonal_route(
                 candidates.append(
                     [start, Point(start.x, y), Point(goal.x, y), goal]
                 )
+        # A stepped escape can pass the end of a sibling trunk before crossing
+        # toward the destination. Without these candidates, a dense fanout is
+        # forced to choose between a short visual junction and falling all the
+        # way back to A*, even when two quiet obstacle-boundary channels form a
+        # clean schematic route.
+        valid_xs = [
+            x for x in x_channels if ROUTE_STEP <= x <= width - ROUTE_STEP
+        ]
+        valid_ys = [
+            y for y in y_channels if ROUTE_STEP <= y <= height - ROUTE_STEP
+        ]
+        midpoint_x = (start.x + goal.x) / 2
+        midpoint_y = (start.y + goal.y) / 2
+        dogleg_xs = sorted(set(
+            sorted(
+                valid_xs,
+                key=lambda x: (min(abs(x - start.x), abs(x - goal.x)), x),
+            )[:10]
+            + sorted(valid_xs, key=lambda x: (abs(x - midpoint_x), x))[:10]
+        ))
+        dogleg_ys = sorted(set(
+            sorted(
+                valid_ys,
+                key=lambda y: (min(abs(y - start.y), abs(y - goal.y)), y),
+            )[:10]
+            + sorted(valid_ys, key=lambda y: (abs(y - midpoint_y), y))[:10]
+        ))
+        for x in dogleg_xs:
+            for y in dogleg_ys:
+                candidates.append([
+                    start,
+                    Point(x, start.y),
+                    Point(x, y),
+                    Point(goal.x, y),
+                    goal,
+                ])
 
         cached = []
         seen = set()
@@ -317,7 +366,9 @@ def direct_orthogonal_route(
 
     scored = [
         (
-            _route_candidate_score(route, used, used_axes, preferred_y),
+            _route_candidate_score(
+                route, used, used_axes, preferred_y, preferred_x
+            ),
             signature,
             route,
         )
@@ -328,7 +379,7 @@ def direct_orthogonal_route(
 
 def _route_conflict_score(
     route: Sequence[Point], previous_routes: Sequence[Sequence[Point]]
-) -> Tuple[int, int, int, int, Tuple[Tuple[int, int], ...]]:
+) -> Tuple[int, int, int, int, int, Tuple[Tuple[int, int], ...]]:
     overlap = sum(
         collinear_route_overlap_length(route, previous)
         for previous in previous_routes
@@ -337,15 +388,20 @@ def _route_conflict_score(
         len(perpendicular_route_crossings(route, previous))
         for previous in previous_routes
     )
+    corner_touches = sum(
+        len(ambiguous_route_corner_touches(route, previous))
+        for previous in previous_routes
+    )
     length = sum(
         abs(a.x - b.x) + abs(a.y - b.y)
         for a, b in zip(route, route[1:])
     )
     bends = max(0, len(route) - 2)
     return (
-        overlap * 200 + crossings * 300 + bends * 40,
+        overlap * 200 + crossings * 300 + corner_touches * 260 + bends * 40,
         crossings,
         overlap,
+        corner_touches,
         length,
         tuple((point.x, point.y) for point in route),
     )
@@ -378,6 +434,11 @@ def _deoverlap_route(
     best_score = _route_conflict_score(best, previous_routes)
     for _ in range(3):
         variants: List[List[Point]] = []
+        ambiguous_points = {
+            point
+            for previous in previous_routes
+            for point in ambiguous_route_corner_touches(best, previous)
+        }
         for segment_index, (a, b) in enumerate(zip(best, best[1:])):
             if segment_index == 0 or segment_index >= len(best) - 2:
                 continue
@@ -385,7 +446,7 @@ def _deoverlap_route(
                 collinear_route_overlap_length([a, b], previous) > 0
                 or perpendicular_route_crossings([a, b], previous)
                 for previous in previous_routes
-            ):
+            ) and a not in ambiguous_points and b not in ambiguous_points:
                 continue
             for offset in (
                 -ROUTE_STEP,
@@ -419,7 +480,7 @@ def _deoverlap_route(
             break
         best = candidate
         best_score = candidate_score
-        if best_score[2] == 0 and best_score[1] == 0:
+        if best_score[1] == 0 and best_score[2] == 0 and best_score[3] == 0:
             break
     return best
 
@@ -486,7 +547,17 @@ def edge_sides(edges: List[Edge], boxes: Dict[str, Box]) -> List[Tuple[str, str]
         if e.from_side is None and e.kind in CONTROL_EDGE_KINDS:
             dx = tb.cx - sb.cx
             dy = tb.cy - sb.cy
-            if abs(dy) > ROW_GAP * 3 and abs(dx) >= abs(dy) * 0.6:
+            if (
+                sb.kind in {"fsm", "arbiter"}
+                and dy > ROW_GAP * 3
+                and tb.col - sb.col >= 2
+            ):
+                # A far downstream control arc should leave through the south
+                # side before turning toward its consumer. Reusing the east
+                # fanout side makes its first horizontal stub cut across the
+                # vertical trunk of a nearer sibling control connection.
+                fs = "s"
+            elif abs(dy) > ROW_GAP * 3 and abs(dx) >= abs(dy) * 0.6:
                 # A long diagonal controller link should leave laterally before
                 # descending; exiting through the bottom tends to encounter the
                 # entire datapath and can send A* around the diagram perimeter.
@@ -676,12 +747,28 @@ def route_edges(
     height: int,
     top_lane_base: int = TOP_LANE_Y,
     bottom_lane_base: Optional[int] = None,
+    obstacle_rects: Sequence[Rect] = (),
     *,
     _source_port_coords: Optional[Dict[int, int]] = None,
     _optimize_ports: bool = True,
     _direct_cache: Optional[Dict[tuple, List[Tuple[tuple, List[Point]]]]] = None,
 ) -> Tuple[List[List[Point]], List[str]]:
     boxes = {b.id: b for b in boxes_list}
+    routing_boxes = [*boxes_list]
+    for obstacle_index, (left, top, right, bottom) in enumerate(obstacle_rects):
+        obstacle_left = int(math.floor(left))
+        obstacle_top = int(math.floor(top))
+        routing_boxes.append(Box(
+            id=f"__route_obstacle_{obstacle_index}",
+            label="",
+            kind="module",
+            col=0,
+            row=0,
+            x=obstacle_left,
+            y=obstacle_top,
+            w=max(1, int(math.ceil(right)) - obstacle_left),
+            h=max(1, int(math.ceil(bottom)) - obstacle_top),
+        ))
     direct_cache = _direct_cache if _direct_cache is not None else {}
     group_members: Dict[str, List[Box]] = defaultdict(list)
     for box in boxes_list:
@@ -689,6 +776,56 @@ def route_edges(
             group_members[box.group].append(box)
     sides = edge_sides(edges, boxes)
     ports = assign_ports(edges, sides, boxes)
+    if obstacle_rects:
+        adjusted_ports = list(ports)
+        adjusted_sides = list(sides)
+        for edge_i, edge in enumerate(edges):
+            p1, p2, from_side, to_side = adjusted_ports[edge_i]
+            endpoint_specs = (
+                (0, edge.source, edge.from_side, p1, p2, from_side),
+                (1, edge.target, edge.to_side, p2, p1, to_side),
+            )
+            for (
+                endpoint_index,
+                block_id,
+                explicit_side,
+                point,
+                other,
+                side,
+            ) in endpoint_specs:
+                stub = outward(point, side)
+                if explicit_side is not None or not any(
+                    _segment_intersects_rect(point, stub, rect, 2)
+                    for rect in obstacle_rects
+                ):
+                    continue
+                alternatives = []
+                for alternate_side in sorted(SIDES - {side}):
+                    alternate_point = port_point(boxes[block_id], alternate_side, 0, 1)
+                    alternate_stub = outward(alternate_point, alternate_side)
+                    if any(
+                        _segment_intersects_rect(
+                            alternate_point, alternate_stub, rect, 2
+                        )
+                        for rect in obstacle_rects
+                    ):
+                        continue
+                    alternatives.append((
+                        abs(alternate_stub.x - other.x) + abs(alternate_stub.y - other.y),
+                        alternate_side,
+                        alternate_point,
+                    ))
+                if not alternatives:
+                    continue
+                _, side, point = min(alternatives)
+                if endpoint_index == 0:
+                    p1, from_side = point, side
+                else:
+                    p2, to_side = point, side
+            adjusted_ports[edge_i] = (p1, p2, from_side, to_side)
+            adjusted_sides[edge_i] = (from_side, to_side)
+        ports = adjusted_ports
+        sides = adjusted_sides
     if _source_port_coords:
         adjusted_ports = []
         for edge_i, (p1, p2, fs, ts) in enumerate(ports):
@@ -704,6 +841,9 @@ def route_edges(
                 )
             adjusted_ports.append((p1, p2, fs, ts))
         ports = adjusted_ports
+    source_side_fanout: Dict[Tuple[str, str], int] = defaultdict(int)
+    for edge, (_, _, from_side, _) in zip(edges, ports):
+        source_side_fanout[(edge.source, from_side)] += 1
     used: Dict[Tuple[int, int], int] = defaultdict(int)
     used_axes: Dict[Tuple[int, int], set[str]] = defaultdict(set)
     routes: List[List[Point]] = []
@@ -791,14 +931,14 @@ def route_edges(
             exterior = simplify_polyline(
                 [s, Point(s.x, lane_y), Point(t.x, lane_y), t]
             )
-            if route_clear_of_boxes(exterior, boxes_list, endpoint_ids):
+            if route_clear_of_boxes(exterior, routing_boxes, endpoint_ids):
                 core = exterior
             else:
                 first, fallback_a = astar_route(
-                    s, Point(s.x, lane_y), boxes_list, width, height, endpoint_ids, used, lane_y, used_axes
+                    s, Point(s.x, lane_y), routing_boxes, width, height, endpoint_ids, used, lane_y, used_axes
                 )
                 last, fallback_b = astar_route(
-                    Point(t.x, lane_y), t, boxes_list, width, height, endpoint_ids, used, lane_y, used_axes
+                    Point(t.x, lane_y), t, routing_boxes, width, height, endpoint_ids, used, lane_y, used_axes
                 )
                 core = simplify_polyline(first + [Point(t.x, lane_y)] + last[1:])
                 used_fallback = fallback_a or fallback_b
@@ -834,14 +974,14 @@ def route_edges(
             exterior = simplify_polyline(
                 [s, Point(s.x, lane_y), Point(t.x, lane_y), t]
             )
-            if route_clear_of_boxes(exterior, boxes_list, endpoint_ids):
+            if route_clear_of_boxes(exterior, routing_boxes, endpoint_ids):
                 core = exterior
             else:
                 first, fallback_a = astar_route(
-                    s, Point(s.x, lane_y), boxes_list, width, height, endpoint_ids, used, lane_y, used_axes
+                    s, Point(s.x, lane_y), routing_boxes, width, height, endpoint_ids, used, lane_y, used_axes
                 )
                 last, fallback_b = astar_route(
-                    Point(t.x, lane_y), t, boxes_list, width, height, endpoint_ids, used, lane_y, used_axes
+                    Point(t.x, lane_y), t, routing_boxes, width, height, endpoint_ids, used, lane_y, used_axes
                 )
                 core = simplify_polyline(first + [Point(t.x, lane_y)] + last[1:])
                 used_fallback = fallback_a or fallback_b
@@ -885,7 +1025,7 @@ def route_edges(
                             ]
                         )
                         if route_clear_of_boxes(
-                            candidate, boxes_list, endpoint_ids
+                            candidate, routing_boxes, endpoint_ids
                         ):
                             clear_handoffs.append((
                                 _route_candidate_score(
@@ -923,7 +1063,7 @@ def route_edges(
                     candidate = simplify_polyline(
                         [s, Point(s.x, corridor_y), Point(t.x, corridor_y), t]
                     )
-                    if route_clear_of_boxes(candidate, boxes_list, endpoint_ids):
+                    if route_clear_of_boxes(candidate, routing_boxes, endpoint_ids):
                         local_candidates.append((
                             _route_candidate_score(
                                 candidate, used, used_axes, mid_y
@@ -948,6 +1088,20 @@ def route_edges(
                     if t.x >= s.x
                     else boxes[e.target].right + ROUTE_CLEAR + 2 * ROUTE_STEP
                 )
+                # Keep the vertical trunk beyond every normal horizontal port
+                # stub on this source side. Otherwise a later sibling edge can
+                # leave the same block, turn at the stub end, and visually join
+                # or cross this trunk immediately outside the source.
+                if fs == "e" and t.x >= s.x:
+                    desired_x = max(
+                        desired_x,
+                        boxes[e.source].right + PORT_STUB + ROUTE_STEP,
+                    )
+                elif fs == "w" and t.x <= s.x:
+                    desired_x = min(
+                        desired_x,
+                        boxes[e.source].left - PORT_STUB - ROUTE_STEP,
+                    )
                 candidate_xs = list(range(_ceil_snap(low_x), _floor_snap(high_x) + 1, ROUTE_STEP))
                 candidate_xs.sort(key=lambda x: (abs(x - desired_x), abs(x - t.x)))
                 long_candidates = []
@@ -955,7 +1109,7 @@ def route_edges(
                     candidate = simplify_polyline(
                         [s, Point(corridor_x, s.y), Point(corridor_x, t.y), t]
                     )
-                    if route_clear_of_boxes(candidate, boxes_list, endpoint_ids):
+                    if route_clear_of_boxes(candidate, routing_boxes, endpoint_ids):
                         long_candidates.append((
                             _route_candidate_score(
                                 candidate, used, used_axes, None
@@ -1008,23 +1162,51 @@ def route_edges(
                 and local_control is None
                 and long_control is None
             ):
+                if (
+                    preferred_y is None
+                    and fs == "s"
+                    and e.kind in CONTROL_EDGE_KINDS
+                ):
+                    nearer_siblings = [
+                        boxes[other.target]
+                        for other in edges
+                        if other is not e
+                        and other.source == e.source
+                        and boxes[other.target].cy < boxes[e.target].cy
+                    ]
+                    if nearer_siblings:
+                        preferred_y = _ceil_snap(
+                            max(box.bottom for box in nearer_siblings)
+                            + ROUTE_CLEAR
+                        )
+                preferred_trunk_x = None
+                if source_side_fanout[(e.source, fs)] > 1:
+                    if fs == "e":
+                        preferred_trunk_x = _snap(
+                            boxes[e.source].right + PORT_STUB + ROUTE_STEP
+                        )
+                    elif fs == "w":
+                        preferred_trunk_x = _snap(
+                            boxes[e.source].left - PORT_STUB - ROUTE_STEP
+                        )
                 direct = direct_orthogonal_route(
                     s,
                     t,
-                    boxes_list,
+                    routing_boxes,
                     endpoint_ids,
                     width,
                     height,
                     used,
                     used_axes,
                     preferred_y,
+                    preferred_trunk_x,
                     direct_cache,
                 )
                 if direct is not None:
                     core = direct
                 else:
                     core, used_fallback = astar_route(
-                        s, t, boxes_list, width, height, endpoint_ids, used, preferred_y, used_axes
+                        s, t, routing_boxes, width, height, endpoint_ids, used, preferred_y, used_axes
                     )
 
         if used_fallback:
@@ -1036,7 +1218,7 @@ def route_edges(
         route = _deoverlap_route(
             route,
             list(routed.values()),
-            boxes_list,
+            routing_boxes,
             endpoint_ids,
         )
         routed[i] = route
@@ -1089,9 +1271,10 @@ def route_edges(
                         height,
                         top_lane_base,
                         bottom_lane_base,
-                            _source_port_coords=trial_overrides,
-                            _optimize_ports=False,
-                            _direct_cache=direct_cache,
+                        obstacle_rects,
+                        _source_port_coords=trial_overrides,
+                        _optimize_ports=False,
+                        _direct_cache=direct_cache,
                         )
                     trial_score = route_quality_score(
                         trial_routes, trial_warnings

@@ -50,7 +50,8 @@ Use `logic` for generic combinational behavior. Use a specific arithmetic or gat
   "from": "producer.out",
   "to": "consumer.in",
   "label": "request",
-  "width": 64,
+  "count": 16,
+  "width": 4,
   "kind": "data",
   "from_side": "e",
   "to_side": "w",
@@ -61,7 +62,8 @@ Use `logic` for generic combinational behavior. Use a specific arithmetic or gat
 - `from` and `to` are required and must name existing block IDs.
 - Optional endpoint suffixes such as `.out` are semantic port names. They are not displayed and do not control port order.
 - `label` defaults to empty.
-- `width` is an optional positive integer. Values greater than one render as a bus and add an `Nb` width annotation when useful.
+- `width` is the optional positive bit width of one value. It renders as an `Nb` annotation when useful.
+- `count` is an optional positive repetition count and requires `width`. Together, `{"count":512,"width":5}` renders as `512 × 5b`. Use it for lanes, rows, entries, or other repeated equal-width values instead of flattening them to `2560b`.
 - `kind` is `data` (default), `control`, `response`, or `clock`.
 - `from_side` and `to_side` may be `n`, `s`, `e`, or `w`. Normally omit them; use them only when the attachment side matters.
 - `via` is `auto` (default), `top`, or `bottom`. Use an exterior route only after automatic routing produces an unclear result.

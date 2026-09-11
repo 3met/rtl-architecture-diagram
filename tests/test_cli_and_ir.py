@@ -181,6 +181,17 @@ class CliAndIrTests(unittest.TestCase):
             with self.assertRaisesRegex(renderer.DiagramError, "duplicate block id"):
                 renderer.load_diagram(path)
 
+    def test_edge_count_requires_a_positive_width(self):
+        diagram = {
+            "blocks": [{"id": "a"}, {"id": "b"}],
+            "edges": [{"from": "a", "to": "b", "count": 512}],
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "invalid-count.diagram.json"
+            path.write_text(json.dumps(diagram), encoding="utf-8")
+            with self.assertRaisesRegex(renderer.DiagramError, "count requires width"):
+                renderer.load_diagram(path)
+
     def test_dotted_block_id_is_rejected(self):
         invalid = {"blocks": [{"id": "bad.id", "at": [0, 0]}], "edges": []}
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -138,6 +138,43 @@ class RoutingTests(unittest.TestCase):
 
         self.assertEqual([renderer.Point(100, 20)], crossings)
 
+    def test_complementary_elbows_are_treated_as_ambiguous_touches(self):
+        top_to_right = [
+            renderer.Point(100, 20),
+            renderer.Point(100, 100),
+            renderer.Point(180, 100),
+        ]
+        left_to_bottom = [
+            renderer.Point(20, 100),
+            renderer.Point(100, 100),
+            renderer.Point(100, 180),
+        ]
+
+        self.assertEqual(
+            [renderer.Point(100, 100)],
+            renderer.ambiguous_route_corner_touches(top_to_right, left_to_bottom),
+        )
+
+    def test_cleanup_separates_complementary_elbows(self):
+        previous = [
+            renderer.Point(100, 20),
+            renderer.Point(100, 100),
+            renderer.Point(180, 100),
+        ]
+        route = [
+            renderer.Point(20, 100),
+            renderer.Point(60, 100),
+            renderer.Point(100, 100),
+            renderer.Point(100, 180),
+            renderer.Point(140, 180),
+        ]
+
+        cleaned = renderer._deoverlap_route(route, [previous], [], set())
+
+        self.assertEqual(
+            [], renderer.ambiguous_route_corner_touches(cleaned, previous)
+        )
+
     def test_route_quality_prefers_a_detour_over_a_wire_crossover(self):
         crossed = [
             [renderer.Point(80, 80), renderer.Point(120, 80)],
@@ -222,6 +259,40 @@ class RoutingTests(unittest.TestCase):
                 placement, [], routes, 0, [], 240, 180
             )
         )
+
+    def test_label_leader_cannot_run_along_its_own_arrow(self):
+        placement = renderer.LabelPlacement(
+            150,
+            64,
+            48,
+            leader_start=renderer.Point(100, 100),
+            leader_end=renderer.Point(140, 100),
+        )
+        routes = [[renderer.Point(40, 100), renderer.Point(180, 100)]]
+
+        self.assertFalse(
+            renderer._placement_is_clear(
+                placement, [], routes, 0, [], 240, 180
+            )
+        )
+
+    def test_router_avoids_group_heading_obstacles(self):
+        boxes = [
+            renderer.Box("source", "Source", "module", 0, 0, x=20, y=80, w=80, h=40),
+            renderer.Box("target", "Target", "module", 1, 0, x=220, y=80, w=80, h=40),
+        ]
+        edge = renderer.Edge("source", "target")
+        heading = (165, 85, 195, 105)
+
+        routes, warnings = renderer.route_edges(
+            [edge], boxes, 340, 200, obstacle_rects=[heading]
+        )
+
+        self.assertEqual([], warnings)
+        self.assertFalse(any(
+            renderer._segment_intersects_rect(a, b, heading, 2)
+            for a, b in zip(routes[0], routes[0][1:])
+        ))
 
     def test_astar_prefers_a_detour_to_crossing_an_existing_route(self):
         used = {(x, 100): 1 for x in range(50, 151, renderer.ROUTE_STEP)}

@@ -33,6 +33,7 @@
     .group.group-2{fill:#fff7ed;stroke:#fdba74}
     .group.group-3{fill:#faf5ff;stroke:#d8b4fe}
     .group-label{font:650 13px Inter,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;fill:#334155}
+    .group-label-bg{fill:#fff;fill-opacity:.96}
     .edge{fill:none;stroke:#475569;stroke-width:1.6;stroke-linejoin:round;stroke-linecap:butt}
     .edge.data{stroke:#2563eb}
     .edge.bus{stroke-width:3}
@@ -56,15 +57,14 @@
 <rect x="0" y="0" width="1240" height="480" class="bg"/>
 <text x="620.0" y="32" class="title">Transposition Table Microarchitecture</text>
 <rect x="818" y="177" width="380" height="116" rx="10" class="group group-0"/>
-<text x="828" y="194" class="group-label">Frontend</text>
 <rect x="337" y="343" width="134" height="68" rx="4" class="memory-shadow"/>
-<polyline points="194,230 230,230 230,180 760,180 760,230 829,230" class="edge data bus"/>
+<polyline points="194,230 230,230 230,190 800,190 800,230 829,230" class="edge data bus"/>
 <polyline points="966,240 1000,240 1000,260 1040,260" class="edge data"/>
-<polyline points="1050,240 1010,240 1010,190 500,190 500,230 474,230" class="edge data"/>
+<polyline points="1050,240 1010,240 1010,170 500,170 500,230 474,230" class="edge data"/>
 <polyline points="380,274 380,326" class="edge data"/>
 <polyline points="410,336 410,284" class="edge response"/>
 <polyline points="464,250 600,250" class="edge data"/>
-<polyline points="610,230 500,230 500,430 230,430 230,250 204,250" class="edge response"/>
+<polyline points="610,230 510,230 510,430 230,430 230,250 204,250" class="edge response"/>
 <polyline points="464,110 1020,110 1020,220 1040,220" class="edge control"/>
 <polyline points="400,144 400,196" class="edge control"/>
 <g class="node normal">
@@ -109,6 +109,8 @@
 <polygon points="204,245 194,250 204,255" class="arrowhead response"/>
 <polygon points="1040,225 1050,220 1040,215" class="arrowhead control"/>
 <polygon points="395,196 400,206 405,196" class="arrowhead control"/>
+<rect x="825.0" y="180.0" width="64.6" height="19.0" rx="3" class="group-label-bg"/>
+<text x="828.0" y="194.0" class="group-label">Frontend</text>
 <polyline points="212,230 212,222" class="label-leader"/>
 <rect x="202.0" y="204.0" width="92.0" height="18.0" rx="5" class="edge-label-bg"/>
 <text x="248.0" y="216.0" class="edge-label data">TT request · 96b</text>

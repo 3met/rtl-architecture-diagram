@@ -55,6 +55,7 @@ class Edge:
     target_port: str = ""
     label: str = ""
     width: Optional[int] = None
+    count: Optional[int] = None
     kind: str = "data"
     from_side: Optional[str] = None
     to_side: Optional[str] = None
@@ -90,4 +91,3 @@ class LabelPlacement:
 
 class DiagramError(Exception):
     """Raised when the compact architecture JSON IR is invalid."""
-

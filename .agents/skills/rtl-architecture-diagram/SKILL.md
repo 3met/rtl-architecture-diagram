@@ -44,7 +44,7 @@ Produce a compact hardware-architecture SVG with the bundled deterministic rende
     {"id":"m","label":"TT RAM","kind":"memory"}
   ],
   "edges": [
-    {"from":"q","to":"a","label":"request","width":96},
+    {"from":"q","to":"a","label":"request","count":32,"width":3},
     {"from":"a","to":"m","label":"lookup"}
   ]
 }
@@ -52,6 +52,8 @@ Produce a compact hardware-architecture SVG with the bundled deterministic rende
 
 Allowed block kinds: `module`, `logic`, `memory`, `fifo`, `mux`, `demux`, `reg`, `counter`, `fsm`, `arbiter`, `io`, `alu`, `adder`, `subtractor`, `addsub`, `multiplier`, `comparator`, `and`, `or`, `xor`, `not`.
 
-Use `width` for multi-bit buses. Omit `at` to use automatic placement.
+Use `width` for the bits in one value. Add `count` for repeated values such as
+`{"count":512,"width":5}`, which renders as `512 × 5b`. Omit `at` to use
+automatic placement.
 
 Read `references/IR.md` when using groups, subtitles, prominence, explicit sizing or placement, port sides, or routing hints.

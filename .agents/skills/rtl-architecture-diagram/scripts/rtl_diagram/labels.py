@@ -39,6 +39,25 @@ def _point_on_boundary(p: Point, b: Box) -> bool:
     )
 
 
+def _side_on_boundary(p: Point, b: Box) -> Optional[str]:
+    """Return the rendered side containing a routed endpoint."""
+    if b.kind != "io":
+        if p.x == b.right and b.top <= p.y <= b.bottom:
+            return "e"
+        if p.x == b.left and b.top <= p.y <= b.bottom:
+            return "w"
+        if p.y == b.top and b.left <= p.x <= b.right:
+            return "n"
+        if p.y == b.bottom and b.left <= p.x <= b.right:
+            return "s"
+        return None
+    for side in ("e", "w", "n", "s"):
+        expected = _rendered_boundary_point(b, side, p.x, p.y)
+        if abs(expected.x - p.x) <= 1 and abs(expected.y - p.y) <= 1:
+            return side
+    return None
+
+
 def _title_text_width(title: str) -> float:
     return max(40.0, len(title) * TITLE_FONT * 0.58)
 
@@ -54,11 +73,94 @@ def _title_rect(title: str, canvas_width: int) -> Rect:
     )
 
 
-def _group_label_rects(grects: Sequence[Tuple[str, str, int, int, int, int]]) -> List[Rect]:
+def _group_port_stubs(
+    boxes: Sequence[Box], edges: Sequence[Edge]
+) -> Dict[str, List[Tuple[Point, Point]]]:
+    stubs_by_group: Dict[str, List[Tuple[Point, Point]]] = defaultdict(list)
+    if boxes and edges:
+        boxes_by_id = {box.id: box for box in boxes}
+        sides = edge_sides(list(edges), boxes_by_id)
+        for edge, (p1, p2, from_side, to_side) in zip(
+            edges, assign_ports(list(edges), sides, boxes_by_id)
+        ):
+            source_group = boxes_by_id[edge.source].group
+            target_group = boxes_by_id[edge.target].group
+            if source_group:
+                stubs_by_group[source_group].append((p1, outward(p1, from_side)))
+            if target_group:
+                stubs_by_group[target_group].append((p2, outward(p2, to_side)))
+    return stubs_by_group
+
+
+def _group_label_rects(
+    grects: Sequence[Tuple[str, str, int, int, int, int]],
+    boxes: Sequence[Box] = (),
+    edges: Sequence[Edge] = (),
+) -> List[Rect]:
+    """Place group headings away from the endpoint stubs they would cover."""
     result = []
-    for _, label, x, y, _, _ in grects:
-        result.append((x + 7, y + 3, x + 14 + len(label) * 7.2, y + 22))
+    stubs_by_group = _group_port_stubs(boxes, edges)
+
+    for group_id, label, x, y, group_width, _ in grects:
+        label_width = 7 + len(label) * 7.2
+        first_left = x + 7
+        last_left = max(first_left, x + group_width - label_width - 7)
+        candidate_lefts = list(
+            range(_ceil_snap(first_left), _floor_snap(last_left) + 1, ROUTE_STEP)
+        )
+        candidate_lefts.extend((first_left, last_left))
+
+        def candidate_score(left: float) -> Tuple[int, float]:
+            rect = (left, y + 3, left + label_width, y + 22)
+            intersections = sum(
+                _segment_intersects_rect(start, end, rect, 2)
+                for start, end in stubs_by_group.get(group_id, [])
+            )
+            return intersections, abs(left - first_left)
+
+        label_left = min(set(candidate_lefts), key=candidate_score)
+        result.append((label_left, y + 3, label_left + label_width, y + 22))
     return result
+
+
+def _expand_groups_for_label_clearance(
+    grects: Sequence[Tuple[str, str, int, int, int, int]],
+    boxes: Sequence[Box],
+    edges: Sequence[Edge],
+    canvas_width: int,
+) -> List[Tuple[str, str, int, int, int, int]]:
+    """Widen a group when its heading blocks every natural endpoint stub."""
+    stubs_by_group = _group_port_stubs(boxes, edges)
+    current_labels = _group_label_rects(grects, boxes, edges)
+    expanded = []
+    for grect, label_rect in zip(grects, current_labels):
+        group_id, label, x, y, group_width, group_height = grect
+        obstructs_stub = any(
+            _segment_intersects_rect(start, end, label_rect, 2)
+            for start, end in stubs_by_group.get(group_id, [])
+        )
+        if not obstructs_stub:
+            expanded.append(grect)
+            continue
+
+        label_width = label_rect[2] - label_rect[0]
+        desired_each_side = _ceil_snap(
+            (label_width + 2 * ROUTE_CLEAR) / 2
+        )
+        left_growth = min(desired_each_side, max(0, x - MARGIN_X))
+        right_growth = min(
+            desired_each_side,
+            max(0, canvas_width - MARGIN_X - (x + group_width)),
+        )
+        expanded.append((
+            group_id,
+            label,
+            x - left_growth,
+            y,
+            group_width + left_growth + right_growth,
+            group_height,
+        ))
+    return expanded
 
 
 def _ordered_positions(low: int, high: int) -> List[int]:
@@ -289,6 +391,12 @@ def _placement_is_clear(
             return False
     leader_segments = _leader_segments(placement)
     if leader_segments:
+        owning_route = routes[edge_index]
+        if any(
+            collinear_route_overlap_length([start, end], owning_route) > 0
+            for start, end in leader_segments
+        ):
+            return False
         if any(
             _segment_intersects_rect(start, end, obstacle, interior=True)
             for start, end in leader_segments
@@ -415,10 +523,15 @@ def place_edge_labels(
     grects: Sequence[Tuple[str, str, int, int, int, int]],
     width: int,
     height: int,
+    group_label_rects: Optional[Sequence[Rect]] = None,
 ) -> Tuple[List[Optional[LabelPlacement]], List[str]]:
     obstacles = [_box_rect(b, LABEL_BLOCK_CLEAR) for b in boxes]
     obstacles.append(_title_rect(title, width))
-    obstacles.extend(_group_label_rects(grects))
+    obstacles.extend(
+        group_label_rects
+        if group_label_rects is not None
+        else _group_label_rects(grects, boxes, edges)
+    )
     boxes_by_id = {b.id: b for b in boxes}
     group_bounds = {
         group_id: (x, y, x + group_width, y + group_height)

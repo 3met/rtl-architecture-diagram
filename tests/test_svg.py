@@ -107,6 +107,14 @@ class SvgTests(unittest.TestCase):
         )
         self.assertNotIn("marker-end", rendered_edge)
         self.assertEqual("64b", renderer.edge_label_text(edge))
+        self.assertEqual(
+            "activations · 512 × 5b",
+            renderer.edge_label_text(
+                renderer.Edge(
+                    "source", "target", label="activations", width=5, count=512
+                )
+            ),
+        )
 
         label = "signed products · 768b"
         self.assertLess(
