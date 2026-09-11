@@ -39,7 +39,17 @@ Or ask naturally for an RTL architecture/datapath diagram; the skill description
 ├── references/IR.md         Complete JSON IR reference
 └── scripts/
     ├── render.py            Stable renderer CLI/import façade
-    └── rtl_diagram/         Model, geometry, and route-quality modules
+    └── rtl_diagram/
+        ├── core.py          Shared constants, sizing, and text helpers
+        ├── ir.py            JSON validation and semantic placement
+        ├── layout.py        Physical block and group layout
+        ├── routing.py       Ports and orthogonal wire routing
+        ├── labels.py        Edge-label placement
+        ├── svg.py           SVG primitives and hardware symbols
+        ├── cli.py           Rendering pipeline, linting, and CLI
+        ├── model.py         Shared data model
+        ├── geometry.py      Orthogonal geometry primitives
+        └── metrics.py       Route-quality measurements
 examples/                    Repository-level showcase diagrams
 tests/                       Focused CLI, IR, layout, routing, and SVG suites
 ```
