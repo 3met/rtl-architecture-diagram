@@ -76,6 +76,7 @@ SVG_CSS = """
     .edge-label.clock{fill:#6d28d9}
     .edge-label.response{fill:#0f766e}
     .edge-label-bg{fill:#fff;fill-opacity:.98;stroke:#cbd5e1;stroke-width:.7}
+    .label-leader-halo{fill:none;stroke:#ffffff;stroke-width:4}
     .label-leader{fill:none;stroke:#cbd5e1;stroke-width:.9}
     """
 
@@ -255,6 +256,10 @@ def svg_edge_label(e: Edge, placement: Optional[LabelPlacement]) -> str:
     if leader_segments:
         leader_points = [leader_segments[0][0], *(end for _, end in leader_segments)]
         points = " ".join(f"{point.x},{point.y}" for point in leader_points)
+        if placement.fallback:
+            parts.append(
+                f'<polyline points="{points}" class="label-leader-halo"/>'
+            )
         parts.append(f'<polyline points="{points}" class="label-leader"/>')
     rect = placement.rect
     parts.append(

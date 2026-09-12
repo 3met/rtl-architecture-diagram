@@ -217,6 +217,7 @@ def _fit_label_inside(placement: LabelPlacement, bounds: Rect) -> LabelPlacement
         placement.leader_end,
         placement.fallback,
         placement.leader_bend,
+        placement.leader_bend2,
     )
 
 
@@ -228,6 +229,10 @@ def _leader_segments(placement: LabelPlacement) -> List[Tuple[Point, Point]]:
         placement.leader_start, placement.leader_end
     }:
         points.append(placement.leader_bend)
+    if placement.leader_bend2 and placement.leader_bend2 not in {
+        placement.leader_start, placement.leader_end, placement.leader_bend
+    }:
+        points.append(placement.leader_bend2)
     points.append(placement.leader_end)
     return list(zip(points, points[1:]))
 
@@ -282,6 +287,7 @@ def _attach_leader_to_label(placement: LabelPlacement) -> LabelPlacement:
         end,
         placement.fallback,
         bend,
+        None,
     )
 
 
@@ -333,6 +339,32 @@ def _leader_route_attachments(
     if not candidates:
         return [_attach_leader_to_label(placement)]
 
+    # For diagonal callouts, both orthogonal elbow orientations are valid.
+    # Trying only the elbow nearest the label can needlessly cross a busy net.
+    alternate_elbows = []
+    for candidate in candidates:
+        start, end = candidate.leader_start, candidate.leader_end
+        if start is None or end is None or start.x == end.x or start.y == end.y:
+            continue
+        elbows = (Point(start.x, end.y), Point(end.x, start.y))
+        alternate = next(
+            (point for point in elbows if point != candidate.leader_bend),
+            None,
+        )
+        if alternate is not None:
+            alternate_elbows.append(LabelPlacement(
+                candidate.x,
+                candidate.y,
+                candidate.width,
+                candidate.height,
+                candidate.leader_start,
+                candidate.leader_end,
+                candidate.fallback,
+                alternate,
+                None,
+            ))
+    candidates.extend(alternate_elbows)
+
     def leader_score(candidate: LabelPlacement) -> Tuple[int, int, int, int]:
         segments = _leader_segments(candidate)
         length = sum(
@@ -366,6 +398,7 @@ def _placement_is_clear(
     width: int,
     height: int,
     containment: Optional[Rect] = None,
+    allow_leader_route_crossings: bool = False,
 ) -> bool:
     rect = placement.rect
     if rect[0] < 4 or rect[1] < 4 or rect[2] > width - 4 or rect[3] > height - 4:
@@ -403,15 +436,16 @@ def _placement_is_clear(
             for obstacle in obstacles
         ):
             return False
-        for route_index, route in enumerate(routes):
-            if route_index == edge_index:
-                continue
-            if any(
-                _segments_intersect(start, end, a, b)
-                for start, end in leader_segments
-                for a, b in zip(route, route[1:])
-            ):
-                return False
+        if not allow_leader_route_crossings:
+            for route_index, route in enumerate(routes):
+                if route_index == edge_index:
+                    continue
+                if any(
+                    _segments_intersect(start, end, a, b)
+                    for start, end in leader_segments
+                    for a, b in zip(route, route[1:])
+                ):
+                    return False
         for other in placed:
             if any(
                 _segment_intersects_rect(start, end, other.rect, 1)
@@ -750,29 +784,142 @@ def place_edge_labels(
                 congestion_cache[rect] = cached
             return cached
 
-        for _, candidate in sorted(
+        ordered_candidates = sorted(
             candidates,
             key=lambda item: (
                 item[0][0],
                 candidate_congestion(item[1]),
                 *item[0][1:],
             ),
-        ):
-            for attachment in _leader_route_attachments(candidate, route):
+        )
+        containment_options = (
+            (containment, None) if containment is not None else (None,)
+        )
+        for candidate_containment in containment_options:
+            for _, candidate in ordered_candidates:
+                for attachment in _leader_route_attachments(candidate, route):
+                    if _placement_is_clear(
+                        attachment,
+                        obstacles,
+                        routes,
+                        edge_index,
+                        placed,
+                        width,
+                        height,
+                        candidate_containment,
+                    ):
+                        selected = attachment
+                        break
+                if selected is not None:
+                    break
+            if selected is not None:
+                break
+
+        if selected is None:
+            # A dense folded row can leave no local home for a long semantic
+            # label even though the canvas has clear space elsewhere. Search
+            # the full canvas for a collision-free callout and retain an
+            # orthogonal leader to the owning net.
+            mx, my, _ = longest_segment_mid(route)
+            half_width = int(math.ceil(text_width / 2))
+            global_sites = [
+                (abs(x - mx) + abs(y - my), y, x)
+                for y in range(24, max(25, height - LABEL_HEIGHT), 30)
+                for x in range(
+                    half_width + LABEL_BLOCK_CLEAR,
+                    max(half_width + LABEL_BLOCK_CLEAR + 1,
+                        width - half_width - LABEL_BLOCK_CLEAR),
+                    30,
+                )
+            ]
+            clear_sites = []
+            for _, baseline, label_x in sorted(global_sites):
+                candidate = LabelPlacement(label_x, baseline, text_width)
                 if _placement_is_clear(
-                    attachment,
+                    candidate,
                     obstacles,
                     routes,
                     edge_index,
                     placed,
                     width,
                     height,
-                    containment,
+                    None,
                 ):
-                    selected = attachment
+                    clear_sites.append((baseline, label_x))
+                    if len(clear_sites) >= 32:
+                        break
+            for baseline, label_x in clear_sites:
+                callout = LabelPlacement(
+                    label_x,
+                    baseline,
+                    text_width,
+                    leader_start=Point(mx, my),
+                    fallback=True,
+                )
+                attachments = _leader_route_attachments(callout, route)
+                for attachment in attachments:
+                    if _placement_is_clear(
+                        attachment,
+                        obstacles,
+                        routes,
+                        edge_index,
+                        placed,
+                        width,
+                        height,
+                        None,
+                        allow_leader_route_crossings=True,
+                    ):
+                        selected = attachment
+                        break
+                if selected is not None:
                     break
-            if selected is not None:
-                break
+                for attachment in attachments:
+                    start, end = attachment.leader_start, attachment.leader_end
+                    if start is None or end is None:
+                        continue
+                    tracks = [
+                        (abs(track_y - start.y) + abs(track_y - end.y), "h", track_y)
+                        for track_y in range(ROUTE_STEP, height, ROUTE_STEP)
+                    ]
+                    tracks.extend(
+                        (abs(track_x - start.x) + abs(track_x - end.x), "v", track_x)
+                        for track_x in range(ROUTE_STEP, width, ROUTE_STEP)
+                    )
+                    for _, orientation, track in sorted(tracks):
+                        if orientation == "h":
+                            bend1 = Point(start.x, track)
+                            bend2 = Point(end.x, track)
+                        else:
+                            bend1 = Point(track, start.y)
+                            bend2 = Point(track, end.y)
+                        dogleg = LabelPlacement(
+                            attachment.x,
+                            attachment.y,
+                            attachment.width,
+                            attachment.height,
+                            start,
+                            end,
+                            attachment.fallback,
+                            bend1,
+                            bend2,
+                        )
+                        if _placement_is_clear(
+                            dogleg,
+                            obstacles,
+                            routes,
+                            edge_index,
+                            placed,
+                            width,
+                            height,
+                            None,
+                            allow_leader_route_crossings=True,
+                        ):
+                            selected = dogleg
+                            break
+                    if selected is not None:
+                        break
+                if selected is not None:
+                    break
 
         if selected is None:
             mx, my, horizontal = longest_segment_mid(route)

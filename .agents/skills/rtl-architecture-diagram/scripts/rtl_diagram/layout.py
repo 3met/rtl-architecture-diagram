@@ -28,13 +28,42 @@ from .ir import *
 def layout_boxes(boxes: List[Box], edges: Optional[Sequence[Edge]] = None) -> Tuple[int, int]:
     rows = sorted({b.row for b in boxes})
     row_h = {r: max(b.h for b in boxes if b.row == r) for r in rows}
+    by_id = {b.id: b for b in boxes}
+
+    # Estimate routing demand before committing geometry. Each net contributes
+    # to every semantic row/column channel it must cross; busy channels receive
+    # extra tracks now instead of forcing the router to discover a squeeze.
+    row_demand: Dict[int, float] = defaultdict(float)
+    col_demand: Dict[Tuple[str, int], float] = defaultdict(float)
+    for edge in edges or ():
+        source, target = by_id[edge.source], by_id[edge.target]
+        weight = effective_edge_importance(edge, by_id)
+        for row in rows[:-1]:
+            if min(source.row, target.row) <= row < max(source.row, target.row):
+                row_demand[row] += weight
+        cluster = source.group or "__ungrouped__"
+        if (
+            cluster == (target.group or "__ungrouped__")
+            and (source.row != target.row or abs(source.col - target.col) > 1)
+        ):
+            for col in range(min(source.col, target.col), max(source.col, target.col)):
+                col_demand[(cluster, col)] += weight
+
+    def demand_space(demand: float) -> int:
+        # The base gap already carries roughly one ordinary connection.
+        extra_tracks = max(0, int(math.ceil((demand - 4.0) / 4.0)))
+        return min(MAX_CHANNEL_EXTRA, extra_tracks * ROUTE_STEP)
 
     row_y: Dict[int, int] = {}
     y = MARGIN_TOP
     last_r = rows[0]
     for r in rows:
         if r != rows[0]:
-            y += ROW_GAP + min(2, max(0, r - last_r - 1)) * 28
+            y += (
+                ROW_GAP
+                + min(2, max(0, r - last_r - 1)) * 28
+                + demand_space(row_demand.get(last_r, 0.0))
+            )
         row_y[r] = y
         y += row_h[r]
         last_r = r
@@ -43,7 +72,6 @@ def layout_boxes(boxes: List[Box], edges: Optional[Sequence[Edge]] = None) -> Tu
         row_center = _snap(row_y[b.row] + row_h[b.row] / 2)
         b.y = int(row_center - b.h / 2)
 
-    by_id = {b.id: b for b in boxes}
     neighbors: Dict[str, List[Box]] = defaultdict(list)
     incoming_controls: Dict[str, List[Box]] = defaultdict(list)
     control_predecessors: Dict[str, set[str]] = defaultdict(set)
@@ -86,7 +114,11 @@ def layout_boxes(boxes: List[Box], edges: Optional[Sequence[Edge]] = None) -> Tu
             members_by_row[b.row].append(b)
         main_row = _choose_main_row(members_by_row, edges or ())
         main = sorted(members_by_row[main_row], key=lambda b: (b.col, b.id))
-        cluster_col_gap = DENSE_COL_GAP if len(main) >= DENSE_ROW_THRESHOLD else COL_GAP
+        cluster_col_gap = (
+            DENSE_COL_GAP
+            if len(main) >= DENSE_ROW_THRESHOLD
+            else max(COL_GAP, 2 * PORT_STUB + ROUTE_STEP)
+        )
 
         cursor = MARGIN_X
         last_col: Optional[int] = None
@@ -94,7 +126,12 @@ def layout_boxes(boxes: List[Box], edges: Optional[Sequence[Edge]] = None) -> Tu
         for b in main:
             if last_col is not None:
                 semantic_gap = min(2, max(0, b.col - last_col - 1)) * 24
-                adjacent_gap = cluster_col_gap + semantic_gap
+                channel_demand = max(
+                    (col_demand.get((cluster_key, col), 0.0)
+                     for col in range(last_col, b.col)),
+                    default=0.0,
+                )
+                adjacent_gap = cluster_col_gap + semantic_gap + demand_space(channel_demand)
                 if previous_main is not None:
                     pair_label_width = labeled_pair_gap.get(
                         tuple(sorted((previous_main.id, b.id))), 0

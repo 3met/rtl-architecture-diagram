@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import bisect
+import copy
 import heapq
 import itertools
 import json
@@ -24,6 +25,264 @@ from .routing import *
 from .labels import *
 from .svg import *
 
+
+def _optimize_global_placement(
+    boxes: List[Box], edges: List[Edge]
+) -> Tuple[int, int]:
+    """Target high-cost nets with block and group moves, rerouting each trial."""
+    width, height = layout_boxes(boxes, edges)
+    if len(boxes) < 2 or not edges:
+        return width, height
+
+    routes, warnings = _route_edges_once(
+        edges, boxes, width, height, _optimize_ports=False
+    )
+    score = route_quality_score(
+        routes, warnings, edges, boxes, width * height
+    )
+    def group_of(box: Box) -> str:
+        return box.group or "__ungrouped__"
+
+    initial_by_id = {box.id: box for box in boxes}
+    semantic_directions = {
+        edge_index: (
+            (initial_by_id[edge.target].col > initial_by_id[edge.source].col)
+            - (initial_by_id[edge.target].col < initial_by_id[edge.source].col)
+        )
+        for edge_index, edge in enumerate(edges)
+        if edge.kind == "data"
+        and group_of(initial_by_id[edge.source])
+        == group_of(initial_by_id[edge.target])
+    }
+
+    def preserves_semantic_order(trial: Sequence[Box]) -> bool:
+        trial_by_id = {box.id: box for box in trial}
+        for edge_index, direction in semantic_directions.items():
+            if direction == 0:
+                continue
+            edge = edges[edge_index]
+            delta = (
+                trial_by_id[edge.target].col
+                - trial_by_id[edge.source].col
+            )
+            if delta * direction <= 0:
+                return False
+        return True
+
+    def can_move_group(group_id: str) -> bool:
+        return group_id != "__ungrouped__" and all(
+            not box.position_fixed
+            for box in boxes
+            if group_of(box) == group_id
+        )
+
+    def apply_operation(trial: List[Box], operation: tuple) -> None:
+        trial_by_id = {box.id: box for box in trial}
+        kind = operation[0]
+        if kind == "move":
+            _, box_id, col, row = operation
+            trial_by_id[box_id].col = max(0, col)
+            trial_by_id[box_id].row = row
+        elif kind == "swap":
+            _, left_id, right_id = operation
+            left, right = trial_by_id[left_id], trial_by_id[right_id]
+            left.col, right.col = right.col, left.col
+            left.row, right.row = right.row, left.row
+        elif kind == "shift_group":
+            _, group_id, col_delta, row_delta = operation
+            for box in trial:
+                if group_of(box) == group_id:
+                    box.col = max(0, box.col + col_delta)
+                    box.row += row_delta
+        elif kind == "swap_groups":
+            _, left_group, right_group = operation
+            left = [box for box in trial if group_of(box) == left_group]
+            right = [box for box in trial if group_of(box) == right_group]
+            left_col, left_row = min(b.col for b in left), min(b.row for b in left)
+            right_col, right_row = min(b.col for b in right), min(b.row for b in right)
+            for box in left:
+                box.col += right_col - left_col
+                box.row += right_row - left_row
+            for box in right:
+                box.col += left_col - right_col
+                box.row += left_row - right_row
+
+    for _ in range(4):
+        by_id = {box.id: box for box in boxes}
+        edge_costs = []
+        conflicts = [0] * len(edges)
+        for left_index, left_route in enumerate(routes):
+            for right_index in range(left_index + 1, len(routes)):
+                severity = (
+                    8 * len(perpendicular_route_crossings(
+                        left_route, routes[right_index]
+                    ))
+                    + 5 * len(ambiguous_route_corner_touches(
+                        left_route, routes[right_index]
+                    ))
+                    + int(collinear_route_overlap_length(
+                        left_route, routes[right_index]
+                    ) > 0) * 10
+                )
+                conflicts[left_index] += severity
+                conflicts[right_index] += severity
+        for edge_index, (edge, route) in enumerate(zip(edges, routes)):
+            route_length = sum(
+                abs(start.x - end.x) + abs(start.y - end.y)
+                for start, end in zip(route, route[1:])
+            )
+            bends = max(0, len(route) - 2)
+            cost = effective_edge_importance(edge, by_id) * (
+                route_length + bends * BEND_COST + conflicts[edge_index] * 1000
+            )
+            edge_costs.append((cost, edge_index))
+
+        candidates: Dict[tuple, float] = {}
+
+        def offer(priority: float, operation: tuple) -> None:
+            candidates[operation] = min(priority, candidates.get(operation, priority))
+
+        for negative_cost, edge_index in (
+            (-cost, edge_index)
+            for cost, edge_index in sorted(edge_costs, reverse=True)[:12]
+        ):
+            edge = edges[edge_index]
+            source, target = by_id[edge.source], by_id[edge.target]
+            same_group = group_of(source) == group_of(target)
+            for moving, other in ((source, target), (target, source)):
+                if moving.position_fixed:
+                    continue
+                col_step = (other.col > moving.col) - (other.col < moving.col)
+                row_step = (other.row > moving.row) - (other.row < moving.row)
+                if col_step:
+                    offer(negative_cost, (
+                        "move", moving.id, moving.col + col_step, moving.row
+                    ))
+                if row_step and same_group:
+                    offer(negative_cost, (
+                        "move", moving.id, moving.col, moving.row + row_step
+                    ))
+                offer(negative_cost + 1, (
+                    "move", moving.id,
+                    max(0, round((moving.col + other.col) / 2)),
+                    (
+                        round((moving.row + other.row) / 2)
+                        if same_group else moving.row
+                    ),
+                ))
+                swap_targets = sorted(
+                    (
+                        candidate for candidate in boxes
+                        if candidate.id != moving.id
+                        and not candidate.position_fixed
+                        and group_of(candidate) == group_of(moving)
+                    ),
+                    key=lambda candidate: (
+                        abs(candidate.col - other.col)
+                        + abs(candidate.row - other.row),
+                        candidate.id,
+                    ),
+                )[:2]
+                for candidate in swap_targets:
+                    offer(
+                        negative_cost + 2,
+                        ("swap", moving.id, candidate.id),
+                    )
+
+            source_group, target_group = group_of(source), group_of(target)
+            if source_group != target_group:
+                col_step = (target.col > source.col) - (target.col < source.col)
+                row_step = (target.row > source.row) - (target.row < source.row)
+                if can_move_group(source_group):
+                    if col_step:
+                        offer(negative_cost + 3, (
+                            "shift_group", source_group, col_step, 0
+                        ))
+                    if row_step:
+                        offer(negative_cost + 3, (
+                            "shift_group", source_group, 0, row_step
+                        ))
+                if can_move_group(target_group):
+                    if col_step:
+                        offer(negative_cost + 3, (
+                            "shift_group", target_group, -col_step, 0
+                        ))
+                    if row_step:
+                        offer(negative_cost + 3, (
+                            "shift_group", target_group, 0, -row_step
+                        ))
+                if can_move_group(source_group) and can_move_group(target_group):
+                    offer(negative_cost + 4, (
+                        "swap_groups", source_group, target_group
+                    ))
+
+        by_lane: Dict[Tuple[str, int], List[Box]] = defaultdict(list)
+        for box in boxes:
+            by_lane[(group_of(box), box.row)].append(box)
+        for members in by_lane.values():
+            ordered = sorted(members, key=lambda box: (box.col, box.id))
+            for left, right in zip(ordered, ordered[1:]):
+                if not left.position_fixed and not right.position_fixed:
+                    offer(0.0, ("swap", left.id, right.id))
+
+        operations = [
+            operation
+            for operation, _ in sorted(
+                candidates.items(), key=lambda item: (item[1], item[0])
+            )[:24]
+        ]
+        best = None
+        for operation_index, operation in enumerate(operations):
+            trial = copy.deepcopy(boxes)
+            apply_operation(trial, operation)
+            if not preserves_semantic_order(trial):
+                continue
+            trial_width, trial_height = layout_boxes(trial, edges)
+            trial_routes, trial_warnings = _route_edges_once(
+                edges, trial, trial_width, trial_height,
+                _optimize_ports=False,
+            )
+            trial_score = route_quality_score(
+                trial_routes, trial_warnings, edges, trial,
+                trial_width * trial_height,
+            )
+            if trial_score < score and (
+                best is None or (trial_score, operation_index) < (best[0], best[1])
+            ):
+                best = (
+                    trial_score, operation_index, trial,
+                    trial_width, trial_height, trial_routes, trial_warnings,
+                )
+        if best is None:
+            break
+        score = best[0]
+        chosen = {box.id: box for box in best[2]}
+        for box in boxes:
+            box.col, box.row = chosen[box.id].col, chosen[box.id].row
+        width, height, routes, warnings = best[3:7]
+        layout_boxes(boxes, edges)
+    rightmost = max(box.right for box in boxes)
+    label_gutter = 0
+    by_id = {box.id: box for box in boxes}
+    for edge in edges:
+        label = edge_label_text(edge)
+        if not label:
+            continue
+        source, target = by_id[edge.source], by_id[edge.target]
+        if min(source.bottom, target.bottom) <= max(source.top, target.top):
+            continue
+        gap = max(source.left, target.left) - min(source.right, target.right)
+        if (
+            gap < estimate_edge_label_width(label) + 2 * LABEL_BLOCK_CLEAR
+            and max(source.right, target.right) >= rightmost - COL_GAP
+        ):
+            label_gutter = max(
+                label_gutter,
+                _ceil_snap(estimate_edge_label_width(label) + 24),
+            )
+    width += label_gutter
+    return width, height
+
 def render(
     title: str,
     boxes: List[Box],
@@ -31,7 +290,7 @@ def render(
     groups: List[dict],
     diagnostics: Optional[List[str]] = None,
 ) -> str:
-    width, height = layout_boxes(boxes, edges)
+    width, height = _optimize_global_placement(boxes, edges)
     width = max(width, _ceil_snap(MARGIN_X * 2 + len(title) * TITLE_FONT * 0.58))
     grects = group_rects(boxes, groups)
     if grects:
@@ -334,18 +593,19 @@ def lint_geometry(
                     for start, end in leader_segments
                 ):
                     warnings.append(f"edge {edge_index} label leader crosses block {block.id}")
-            for route_index, route in enumerate(routes):
-                if route_index == edge_index:
-                    continue
-                if any(
-                    _segments_intersect(start, end, a, b)
-                    for start, end in leader_segments
-                    for a, b in zip(route, route[1:])
-                ):
-                    warnings.append(
-                        f"edge {edge_index} label leader overlaps edge {route_index}"
-                    )
-                    break
+            if not placement.fallback:
+                for route_index, route in enumerate(routes):
+                    if route_index == edge_index:
+                        continue
+                    if any(
+                        _segments_intersect(start, end, a, b)
+                        for start, end in leader_segments
+                        for a, b in zip(route, route[1:])
+                    ):
+                        warnings.append(
+                            f"edge {edge_index} label leader overlaps edge {route_index}"
+                        )
+                        break
 
     for i, (edge_a, rect_a) in enumerate(label_rects):
         for edge_b, rect_b in label_rects[i + 1:]:

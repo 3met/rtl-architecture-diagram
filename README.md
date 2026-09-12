@@ -78,7 +78,7 @@ The suite covers the CLI, IR validation, deterministic layout, routing, labels, 
 
 Codex extracts the diagram boundary, architectural blocks, and connections from the design source, then writes a compact JSON IR. The renderer turns that IR into deterministic layout, routing, labels, hardware symbols, and SVG.
 
-Block `at:[column,row]` values are optional semantic anchors. Prefer automatic placement, and revise the JSON rather than editing generated SVG geometry.
+Automatic placement is connectivity-, semantics-, and routing-aware. `at:[column,row]` is reserved for an optional hard override; normal generated IR should omit it. Positive block and edge `importance` weights prioritize critical connections during placement, side selection, and negotiated-congestion routing.
 
 ## Built-in hardware notation
 

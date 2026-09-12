@@ -407,26 +407,6 @@ def _reflow_dense_groups(
                 ]
                 anchors = data_links or main_links
                 desired_center = sum(other.cx for other, _ in anchors) / len(anchors)
-                tail_consumers = [
-                    other
-                    for other, _ in data_links
-                    if other in tail
-                ]
-                if len(tail_consumers) == 1:
-                    consumer = tail_consumers[0]
-                    blocked_above = any(
-                        head_box.left - ROUTE_CLEAR < consumer.right
-                        and head_box.right + ROUTE_CLEAR > consumer.left
-                        for head_box in head
-                    )
-                    if blocked_above:
-                        # A support memory directly above the first return
-                        # stage would hide behind the head-stage occupying that
-                        # column. Put it beside its consumer instead, producing
-                        # the short connection a human drafter would choose.
-                        box.x = _ceil_snap(consumer.right + 2 * ROUTE_CLEAR)
-                        box.y = int(consumer.cy - box.h / 2)
-                        continue
             else:
                 main_center = sum(other.cx for other, _ in main_links) / len(main_links)
                 same_group_links = [
@@ -590,24 +570,76 @@ def _infer_missing_positions(
         if box.kind == "fsm":
             return -1
         if box.kind == "memory":
-            if response_out[box.id] or not (
-                data_in[box.id] and data_out[box.id]
-            ):
+            if response_out[box.id]:
+                return 1
+            if box.group and data_out[box.id] and not data_in[box.id]:
+                return -1
+            if data_in[box.id] and not data_out[box.id]:
+                return 1
+            if data_out[box.id] and not data_in[box.id]:
                 return 1
         return 0
 
-    declared_groups = [str(group["id"]) for group in groups]
-    group_slot = {group_id: index for index, group_id in enumerate(declared_groups)}
-    extra_groups = sorted(
-        cluster
+    # Derive group bands from the inter-group dataflow graph. Declaration order
+    # carries no architectural meaning. Storage-only groups with both upstream
+    # and downstream clients may occupy the boundary between those clients.
+    cluster_successors: Dict[str, set[str]] = defaultdict(set)
+    cluster_predecessors: Dict[str, set[str]] = defaultdict(set)
+    for edge in edges:
+        source_cluster = cluster_of[edge.source]
+        target_cluster = cluster_of[edge.target]
+        if (
+            edge.kind == "data"
+            and source_cluster != target_cluster
+        ):
+            cluster_successors[source_cluster].add(target_cluster)
+            cluster_predecessors[target_cluster].add(source_cluster)
+
+    cluster_indegree = {
+        cluster: len(cluster_predecessors.get(cluster, set()))
         for cluster in members_by_cluster
-        if cluster != "__ungrouped__" and cluster not in group_slot
+    }
+    ready_clusters = sorted(
+        cluster for cluster, degree in cluster_indegree.items() if degree == 0
     )
-    for group_id in extra_groups:
-        group_slot[group_id] = len(group_slot)
+    cluster_rank = {cluster: 0 for cluster in members_by_cluster}
+    visited_clusters = set()
+    while ready_clusters:
+        cluster = ready_clusters.pop(0)
+        visited_clusters.add(cluster)
+        for target in sorted(cluster_successors.get(cluster, set())):
+            cluster_rank[target] = max(
+                cluster_rank[target], cluster_rank[cluster] + 1
+            )
+            cluster_indegree[target] -= 1
+            if cluster_indegree[target] == 0:
+                ready_clusters.append(target)
+                ready_clusters.sort()
+    for cluster in sorted(set(members_by_cluster) - visited_clusters):
+        cluster_rank[cluster] = max(
+            (cluster_rank[pred] + 1
+             for pred in cluster_predecessors.get(cluster, set())),
+            default=0,
+        )
+
+    cluster_order = sorted(
+        members_by_cluster,
+        key=lambda cluster: (cluster_rank[cluster], cluster),
+    )
+    cluster_order_index = {
+        cluster: index for index, cluster in enumerate(cluster_order)
+    }
+    local_row_bounds = {
+        cluster: (
+            min(row_offset(box) for box in members),
+            max(row_offset(box) for box in members),
+        )
+        for cluster, members in members_by_cluster.items()
+    }
 
     base_rows: Dict[str, int] = {}
-    for cluster, members in members_by_cluster.items():
+    for cluster in cluster_order:
+        members = members_by_cluster[cluster]
         explicit_bases = [
             explicit_positions[box.id][1] - row_offset(box)
             for box in members
@@ -618,19 +650,42 @@ def _infer_missing_positions(
         elif cluster == "__ungrouped__":
             base_rows[cluster] = 1
         else:
-            base_rows[cluster] = 1 + 3 * group_slot.get(cluster, 0)
+            predecessors = [
+                predecessor
+                for predecessor in cluster_predecessors.get(cluster, set())
+                if predecessor in base_rows
+            ]
+            if not predecessors:
+                base_rows[cluster] = 1
+                continue
+            predecessor_bottom = max(
+                base_rows[predecessor] + local_row_bounds[predecessor][1]
+                for predecessor in predecessors
+            )
+            is_storage_bridge = (
+                bool(cluster_successors.get(cluster))
+                and all(
+                    box.kind in {"memory", "fifo", "reg"}
+                    for box in members
+                )
+            )
+            target_top = predecessor_bottom + (0 if is_storage_bridge else 1)
+            base_rows[cluster] = target_top - local_row_bounds[cluster][0]
 
-    occupied = set(explicit_positions.values())
+    occupied_by_cluster: Dict[str, set[Tuple[int, int]]] = defaultdict(set)
+    for box_id, position in explicit_positions.items():
+        occupied_by_cluster[cluster_of[box_id]].add(position)
     missing = sorted(
         (box for box in boxes if box.id not in explicit_positions),
         key=lambda box: (
-            group_slot.get(cluster_of[box.id], -1),
+            cluster_order_index.get(cluster_of[box.id], -1),
             ranks[box.id],
             box.id,
         ),
     )
     for box in missing:
         box.col = ranks[box.id]
+        occupied = occupied_by_cluster[cluster_of[box.id]]
         preferred_row = base_rows[cluster_of[box.id]] + row_offset(box)
         role_offset = row_offset(box)
         if role_offset < 0:
@@ -654,7 +709,8 @@ def _infer_missing_positions(
             for row in row_candidates
             if (box.col, row) not in occupied
         )
-        occupied.add((box.col, box.row))
+        # Automatic peers may share a semantic rank/lane. Physical layout
+        # separates and orders them; only hard overrides reserve coordinates.
 
 
 def _parse_prominence(raw: dict, block_id: str) -> str:
@@ -669,6 +725,18 @@ def _parse_prominence(raw: dict, block_id: str) -> str:
             f"block {block_id}: 'bigger' and 'smaller' cannot both be true"
         )
     return "bigger" if bigger else ("smaller" if smaller else "normal")
+
+
+def _parse_importance(raw: dict, owner: str) -> float:
+    value = raw.get("importance", 1.0)
+    if (
+        not isinstance(value, (int, float))
+        or isinstance(value, bool)
+        or not math.isfinite(value)
+        or value <= 0
+    ):
+        raise DiagramError(f"{owner}: importance must be a positive number")
+    return float(value)
 
 
 def _parse_position(
@@ -755,6 +823,7 @@ def _parse_blocks(
             str(raw["group"]).strip() if raw.get("group") is not None else None
         )
         prominence = _parse_prominence(raw, block_id)
+        importance = _parse_importance(raw, f"block {block_id}")
         col, row = _parse_position(raw, block_id, occupied, explicit)
         width, height = _parse_size(
             raw, block_id, label, subtitle, kind, prominence
@@ -772,6 +841,8 @@ def _parse_blocks(
                 h=height,
                 prominence=prominence,
                 size_explicit="size" in raw,
+                importance=importance,
+                position_fixed="at" in raw,
             )
         )
     return boxes, explicit
@@ -816,6 +887,7 @@ def _parse_edges(raw_edges: Sequence[object], boxes: Sequence[Box]) -> List[Edge
             raise DiagramError(f"edge {index}: count must be a positive integer")
         if count is not None and width is None:
             raise DiagramError(f"edge {index}: count requires width")
+        importance = _parse_importance(raw, f"edge {index}")
         edges.append(
             Edge(
                 source=source,
@@ -829,6 +901,7 @@ def _parse_edges(raw_edges: Sequence[object], boxes: Sequence[Box]) -> List[Edge
                 from_side=from_side,
                 to_side=to_side,
                 via=via,
+                importance=importance,
             )
         )
     return edges

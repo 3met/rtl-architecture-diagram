@@ -12,7 +12,7 @@ Produce a compact hardware-architecture SVG with the bundled deterministic rende
 1. Establish the requested view boundary and top module. If ambiguous, choose the most likely scope and state the assumption.
 2. Inspect the relevant design sources. Trace instantiations and the data/control paths needed to support each major block and connection.
 3. Choose the abstraction before drawing. Show semantic hardware units, not literal RTL statements.
-4. Write `<name>.diagram.json` using the compact IR below. Normally omit `at` and let the renderer infer semantic ranks and lanes. Add `at:[column,row]` only as an architectural anchor; never use pixel coordinates.
+4. Write `<name>.diagram.json` using the compact IR below. Omit `at` during normal generation and let the renderer optimize semantic ranks and lanes. Use `at:[column,row]` only as an exceptional hard placement override; never use pixel coordinates.
 5. Render and validate it:
    `python <skill-dir>/scripts/render.py <name>.diagram.json -o <name>.svg --lint --strict`
 6. Resolve every warning in the JSON and re-render. Do not edit generated SVG geometry.
@@ -29,6 +29,7 @@ Produce a compact hardware-architecture SVG with the bundled deterministic rende
 - Show bit widths only when useful. Use RTL signal/module names only when they aid traceability; prefer short architectural labels.
 - Do not invent a block or connection to make the diagram look complete. Omit uncertain detail or label it as an inference.
 - Use `"bigger":true` or `"smaller":true` sparingly when architectural importance should change a node's visual prominence. Never set both. Omit both for normal nodes; do not use prominence merely to repair layout.
+- Use numeric `importance` on a block or edge only when a connection is architecturally more important than ordinary wiring. The optimizer weights its length, bends, crossings, and congestion accordingly.
 - Use `kind:"control"` for control signals and `kind:"response"` for return paths.
 - Let the renderer choose placement, port sides, and routes. Add optional layout or routing hints only when they communicate architecture or fix an unclear render.
 - Avoid crossing hierarchy boundaries unless the connection matters to the requested view.

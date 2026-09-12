@@ -21,6 +21,8 @@ class Box:
     y: int = 0
     prominence: str = "normal"
     size_explicit: bool = False
+    importance: float = 1.0
+    position_fixed: bool = False
 
     @property
     def left(self) -> int:
@@ -60,6 +62,7 @@ class Edge:
     from_side: Optional[str] = None
     to_side: Optional[str] = None
     via: str = "auto"
+    importance: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -78,6 +81,7 @@ class LabelPlacement:
     leader_end: Optional[Point] = None
     fallback: bool = False
     leader_bend: Optional[Point] = None
+    leader_bend2: Optional[Point] = None
 
     @property
     def rect(self) -> Tuple[float, float, float, float]:

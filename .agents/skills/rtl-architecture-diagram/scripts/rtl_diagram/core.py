@@ -47,14 +47,16 @@ MARGIN_X = 62
 MARGIN_TOP = 72
 MARGIN_BOTTOM = 62
 COL_GAP = 88
-DENSE_COL_GAP = 72
+DENSE_COL_GAP = 60
 DENSE_ROW_THRESHOLD = 8
 FOLD_ROW_THRESHOLD = 9
-ROW_GAP = 64
+ROW_GAP = 60
 GROUP_PAD = 22
 GROUP_EDGE_ALIGN = 20
 ROUTE_CLEAR = 14
 ROUTE_STEP = 10
+MAX_CHANNEL_EXTRA = 3 * ROUTE_STEP
+BEND_COST = 120
 PORT_STUB = 40
 VERTICAL_PORT_STUB = 20
 FONT = 14
@@ -93,9 +95,12 @@ def edge_label_text(edge: Edge) -> str:
     """Return the visible edge label, including an implicit bus width."""
     label = edge.label
     if edge.width:
+        count_is_already_explicit = bool(
+            label and edge.count is not None and str(edge.count) in label
+        )
         width_text = (
             f"{edge.count} × {edge.width}b"
-            if edge.count
+            if edge.count and not count_is_already_explicit
             else f"{edge.width}b"
         )
         if not label:
@@ -106,6 +111,17 @@ def edge_label_text(edge: Edge) -> str:
         ):
             label = f"{label} · {width_text}"
     return label
+
+
+def effective_edge_importance(edge: Edge, boxes: Dict[str, Box]) -> float:
+    """Combine explicit net priority with the importance of its endpoints."""
+    source = boxes.get(edge.source)
+    target = boxes.get(edge.target)
+    block_weight = math.sqrt(
+        (source.importance if source else 1.0)
+        * (target.importance if target else 1.0)
+    )
+    return edge.importance * block_weight
 
 
 def estimate_edge_label_width(label: str) -> float:

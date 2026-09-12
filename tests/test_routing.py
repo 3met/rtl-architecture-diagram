@@ -4,6 +4,47 @@ from support import renderer
 
 
 class RoutingTests(unittest.TestCase):
+    def test_route_quality_weights_important_wire_length_and_bends(self):
+        boxes = [
+            renderer.Box("a", "A", "module", 0, 0),
+            renderer.Box("b", "B", "module", 1, 0),
+        ]
+        route = [
+            renderer.Point(0, 0),
+            renderer.Point(100, 0),
+            renderer.Point(100, 100),
+        ]
+        low = renderer.route_quality_score(
+            [route], edges=[renderer.Edge("a", "b")], boxes=boxes
+        )
+        high = renderer.route_quality_score(
+            [route], edges=[renderer.Edge("a", "b", importance=4)], boxes=boxes
+        )
+        self.assertGreater(high[4], low[4])
+
+    def test_multi_start_router_is_never_worse_than_default_order(self):
+        boxes = [
+            renderer.Box("a", "A", "module", 0, 0, x=20, y=20, w=80, h=40),
+            renderer.Box("b", "B", "module", 1, 1, x=220, y=140, w=80, h=40),
+            renderer.Box("c", "C", "module", 0, 1, x=20, y=140, w=80, h=40),
+            renderer.Box("d", "D", "module", 1, 0, x=220, y=20, w=80, h=40),
+        ]
+        edges = [renderer.Edge("a", "b"), renderer.Edge("c", "d")]
+        baseline, baseline_warnings = renderer._route_edges_once(
+            edges, boxes, 340, 220, _optimize_ports=False
+        )
+        optimized, optimized_warnings = renderer.route_edges(
+            edges, boxes, 340, 220
+        )
+        self.assertLessEqual(
+            renderer.route_quality_score(
+                optimized, optimized_warnings, edges, boxes, 340 * 220
+            ),
+            renderer.route_quality_score(
+                baseline, baseline_warnings, edges, boxes, 340 * 220
+            ),
+        )
+
     def test_lint_rejects_arrow_running_down_target_edge(self):
         boxes = [renderer.Box("a", "A", "module", 0, 0, x=20, y=20, w=80, h=40),
                  renderer.Box("b", "B", "module", 1, 1, x=200, y=100, w=80, h=40)]

@@ -115,6 +115,15 @@ class SvgTests(unittest.TestCase):
                 )
             ),
         )
+        self.assertEqual(
+            "128 activations per cycle · 4b",
+            renderer.edge_label_text(
+                renderer.Edge(
+                    "source", "target",
+                    label="128 activations per cycle", width=4, count=128,
+                )
+            ),
+        )
 
         label = "signed products · 768b"
         self.assertLess(

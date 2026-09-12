@@ -1,13 +1,13 @@
 {
   "title": "Transposition Table Microarchitecture",
   "blocks": [
-    {"id":"search","label":"Search Threads","kind":"module","at":[0,1]},
-    {"id":"reqq","label":"Request FIFO","kind":"fifo","at":[1,1],"group":"front"},
-    {"id":"arb","label":"Arbiter","kind":"arbiter","at":[2,1],"group":"front"},
-    {"id":"pipe","label":"TT Pipeline","kind":"logic","at":[3,1],"subtitle":"probe / replace"},
-    {"id":"ram","label":"TT Storage","kind":"memory","at":[3,2]},
-    {"id":"rsp","label":"Response FIFO","kind":"fifo","at":[4,1]},
-    {"id":"ctrl","label":"TT Control","kind":"fsm","at":[2,0]}
+    {"id":"search","label":"Search Threads","kind":"module"},
+    {"id":"reqq","label":"Request FIFO","kind":"fifo","group":"front"},
+    {"id":"arb","label":"Arbiter","kind":"arbiter","group":"front","importance":1.5},
+    {"id":"pipe","label":"TT Pipeline","kind":"logic","subtitle":"probe / replace","importance":2},
+    {"id":"ram","label":"TT Storage","kind":"memory","importance":2},
+    {"id":"rsp","label":"Response FIFO","kind":"fifo"},
+    {"id":"ctrl","label":"TT Control","kind":"fsm"}
   ],
   "groups": [
     {"id":"front","label":"Frontend"}
@@ -15,7 +15,7 @@
   "edges": [
     {"from":"search.req","to":"reqq.in","label":"TT request","width":96},
     {"from":"reqq.out","to":"arb.in"},
-    {"from":"arb.out","to":"pipe.req"},
+    {"from":"arb.out","to":"pipe.req","importance":2},
     {"from":"pipe.mem","to":"ram.port","label":"entry"},
     {"from":"ram.data","to":"pipe.data","label":"read data","kind":"response"},
     {"from":"pipe.rsp","to":"rsp.in","label":"hit / score"},

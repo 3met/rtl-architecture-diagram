@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from typing import List, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
-from .model import Point
+from .model import Box, Edge, Point
 
 
 def ambiguous_route_corner_touches(
@@ -94,40 +94,55 @@ def collinear_route_overlap_length(
 
 
 def route_quality_score(
-    routes: Sequence[Sequence[Point]], warnings: Sequence[str] = ()
-) -> Tuple[int, int, int, int, int, int, int]:
-    """Score a routed diagram with crossings and bends as first-class costs."""
-    crossings = sum(
-        len(perpendicular_route_crossings(left, right))
-        for left_index, left in enumerate(routes)
-        for right in routes[left_index + 1:]
-    )
-    overlap = sum(
-        collinear_route_overlap_length(left, right)
-        for left_index, left in enumerate(routes)
-        for right in routes[left_index + 1:]
-    )
-    corner_touches = sum(
-        len(ambiguous_route_corner_touches(left, right))
-        for left_index, left in enumerate(routes)
-        for right in routes[left_index + 1:]
-    )
-    bends = sum(max(0, len(route) - 2) for route in routes)
-    length = sum(
-        abs(start.x - end.x) + abs(start.y - end.y)
-        for route in routes
-        for start, end in zip(route, route[1:])
-    )
+    routes: Sequence[Sequence[Point]],
+    warnings: Sequence[str] = (),
+    edges: Optional[Sequence[Edge]] = None,
+    boxes: Optional[Sequence[Box]] = None,
+    area: int = 0,
+) -> Tuple[int, int, int, int, float, float, int, int]:
+    """Lexicographically score ambiguity before weighted geometry and area."""
+    by_id: Dict[str, Box] = {box.id: box for box in boxes or ()}
+    weights = [1.0] * len(routes)
+    if edges is not None:
+        weights = [
+            edge.importance
+            * ((by_id.get(edge.source).importance if edge.source in by_id else 1.0)
+               * (by_id.get(edge.target).importance if edge.target in by_id else 1.0)) ** 0.5
+            for edge in edges
+        ]
+    crossings = overlap = corner_touches = bends = length = 0
+    weighted_conflicts = 0.0
+    weighted_length_and_bends = 0.0
+    for left_index, left in enumerate(routes):
+        bends_i = max(0, len(left) - 2)
+        length_i = sum(
+            abs(start.x - end.x) + abs(start.y - end.y)
+            for start, end in zip(left, left[1:])
+        )
+        bends += bends_i
+        length += length_i
+        weighted_length_and_bends += weights[left_index] * (
+            length_i + bends_i * 120
+        )
+        for right_index in range(left_index + 1, len(routes)):
+            right = routes[right_index]
+            pair_weight = max(weights[left_index], weights[right_index])
+            cross = len(perpendicular_route_crossings(left, right))
+            shared = collinear_route_overlap_length(left, right)
+            corners = len(ambiguous_route_corner_touches(left, right))
+            crossings += cross
+            overlap += shared
+            corner_touches += corners
+            weighted_conflicts += pair_weight * (
+                cross * 1000 + corners * 500 + shared * 200
+            )
     return (
         len(warnings),
-        crossings * 250
-        + corner_touches * 220
-        + bends * 60
-        + overlap * 200
-        + length,
         crossings,
         corner_touches,
-        bends,
         overlap,
+        weighted_conflicts + weighted_length_and_bends,
+        float(area),
+        bends,
         length,
     )

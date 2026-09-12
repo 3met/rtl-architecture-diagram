@@ -134,6 +134,36 @@ class CliAndIrTests(unittest.TestCase):
         renderer.render(title, boxes, edges, groups, diagnostics)
         self.assertEqual([], diagnostics)
 
+    def test_group_declaration_order_does_not_control_bands(self):
+        diagram = {
+            "groups": [
+                {"id": "producer"},
+                {"id": "bridge"},
+                {"id": "consumer"},
+            ],
+            "blocks": [
+                {"id": "a", "group": "producer"},
+                {"id": "b", "group": "bridge", "kind": "reg"},
+                {"id": "c", "group": "consumer"},
+            ],
+            "edges": [
+                {"from": "a", "to": "b"},
+                {"from": "b", "to": "c"},
+            ],
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "groups.diagram.json"
+            path.write_text(json.dumps(diagram), encoding="utf-8")
+            _, boxes, _, _, _ = renderer.load_diagram(path)
+            diagram["groups"] = list(reversed(diagram["groups"]))
+            path.write_text(json.dumps(diagram), encoding="utf-8")
+            _, reversed_boxes, _, _, _ = renderer.load_diagram(path)
+
+        self.assertEqual(
+            {box.id: (box.col, box.row) for box in boxes},
+            {box.id: (box.col, box.row) for box in reversed_boxes},
+        )
+
     def test_partial_at_values_are_preserved_as_semantic_anchors(self):
         diagram = {
             "blocks": [
@@ -154,8 +184,30 @@ class CliAndIrTests(unittest.TestCase):
         by_id = {box.id: box for box in boxes}
         self.assertEqual([], warnings)
         self.assertEqual((5, 4), (by_id["b"].col, by_id["b"].row))
+        self.assertTrue(by_id["b"].position_fixed)
         self.assertEqual((4, 4), (by_id["a"].col, by_id["a"].row))
         self.assertEqual((6, 4), (by_id["c"].col, by_id["c"].row))
+        renderer.render("Anchored", boxes, [], [])
+        self.assertEqual((5, 4), (by_id["b"].col, by_id["b"].row))
+
+    def test_importance_is_positive_and_parsed_for_blocks_and_edges(self):
+        diagram = {
+            "blocks": [
+                {"id": "a", "importance": 2.5},
+                {"id": "b"},
+            ],
+            "edges": [{"from": "a", "to": "b", "importance": 3}],
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            path = Path(temp_dir) / "importance.diagram.json"
+            path.write_text(json.dumps(diagram), encoding="utf-8")
+            _, boxes, edges, _, _ = renderer.load_diagram(path)
+            self.assertEqual(2.5, boxes[0].importance)
+            self.assertEqual(3.0, edges[0].importance)
+            diagram["edges"][0]["importance"] = 0
+            path.write_text(json.dumps(diagram), encoding="utf-8")
+            with self.assertRaisesRegex(renderer.DiagramError, "positive number"):
+                renderer.load_diagram(path)
 
     def test_malformed_optional_at_is_rejected(self):
         invalid = {"blocks": [{"id": "bad", "at": ["left", 1]}], "edges": []}

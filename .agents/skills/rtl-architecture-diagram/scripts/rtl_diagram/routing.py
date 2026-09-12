@@ -49,7 +49,9 @@ def blocked_cells(boxes: Sequence[Box], ignore: set[str], width: int, height: in
 def astar_route(start: Point, goal: Point, boxes: Sequence[Box], width: int, height: int,
                 ignore: set[str], used: Dict[Tuple[int, int], int],
                 preferred_y: Optional[int] = None,
-                used_axes: Optional[Dict[Tuple[int, int], set[str]]] = None) -> Tuple[List[Point], bool]:
+                used_axes: Optional[Dict[Tuple[int, int], set[str]]] = None,
+                importance: float = 1.0,
+                history: Optional[Dict[Tuple[int, int], float]] = None) -> Tuple[List[Point], bool]:
     start = Point(_snap(start.x), _snap(start.y))
     goal = Point(_snap(goal.x), _snap(goal.y))
     blocked = blocked_cells(boxes, ignore, width, height)
@@ -93,7 +95,9 @@ def astar_route(start: Point, goal: Point, boxes: Sequence[Box], width: int, hei
     goal_state = None
 
     def h(x: int, y: int) -> float:
-        return (abs(goal.x - x) + abs(goal.y - y)) / ROUTE_STEP
+        return importance * (
+            abs(goal.x - x) + abs(goal.y - y)
+        ) / ROUTE_STEP
 
     max_nodes = max(20000, (width // ROUTE_STEP) * (height // ROUTE_STEP) * 4)
     visited = 0
@@ -113,7 +117,7 @@ def astar_route(start: Point, goal: Point, boxes: Sequence[Box], width: int, hei
                 continue
             if (nx, ny) in blocked:
                 continue
-            bend = 0.0 if (pdx, pdy) in {(0, 0), (dx, dy)} else 12.0
+            bend = 0.0 if (pdx, pdy) in {(0, 0), (dx, dy)} else 12.0 * importance
             axis = "h" if dx else "v"
             occupied_axes = used_axes.get((nx, ny), set()) if used_axes is not None else set()
             # Crossing an existing route is visually more ambiguous than
@@ -122,11 +126,14 @@ def astar_route(start: Point, goal: Point, boxes: Sequence[Box], width: int, hei
             # may still use a congested channel when geometry leaves no choice.
             crossing = 80.0 if occupied_axes and axis not in occupied_axes else 0.0
             sharing = 15.0 if axis in occupied_axes else 0.0
-            occupancy = used.get((nx, ny), 0) * 1.8 + crossing + sharing
+            occupancy = importance * (
+                used.get((nx, ny), 0) * 1.8 + crossing + sharing
+                + (history or {}).get((nx, ny), 0.0)
+            )
             corridor = 0.0
             if preferred_y is not None:
                 corridor = min(3.0, abs(ny - preferred_y) / 120.0)
-            ng = g + 1.0 + bend + occupancy + corridor
+            ng = g + importance + bend + occupancy + corridor
             ns = (nx, ny, dx, dy)
             if ng + 1e-9 < best.get(ns, float("inf")):
                 best[ns] = ng
@@ -170,9 +177,11 @@ def route_clear_of_boxes(
 ) -> bool:
     """Return whether an orthogonal candidate keeps normal block clearance."""
     for box in boxes:
-        if box.id in ignore:
-            continue
-        clearance = 2 if box.id.startswith("__route_obstacle_") else ROUTE_CLEAR
+        clearance = (
+            0
+            if box.id in ignore
+            else (2 if box.id.startswith("__route_obstacle_") else ROUTE_CLEAR)
+        )
         rect = (
             box.left - clearance,
             box.top - clearance,
@@ -191,6 +200,8 @@ def _route_candidate_score(
     used_axes: Dict[Tuple[int, int], set[str]],
     preferred_y: Optional[int],
     preferred_x: Optional[int] = None,
+    importance: float = 1.0,
+    history: Optional[Dict[Tuple[int, int], float]] = None,
 ) -> float:
     """Score a clear orthogonal candidate by length, bends, and ambiguity."""
     length = 0
@@ -223,6 +234,7 @@ def _route_candidate_score(
             elif axis in axes:
                 occupancy += 20
             occupancy += used.get(cell, 0) * 1.5
+            occupancy += (history or {}).get(cell, 0.0)
     bends = max(0, len(route) - 2)
     corridor = 0.0
     if preferred_y is not None:
@@ -237,7 +249,7 @@ def _route_candidate_score(
         ]
         if vertical_xs:
             corridor += min(abs(x - preferred_x) for x in vertical_xs) * 3.0
-    return length + bends * 60 + occupancy + corridor
+    return importance * (length + bends * BEND_COST + occupancy) + corridor
 
 
 def direct_orthogonal_route(
@@ -252,6 +264,8 @@ def direct_orthogonal_route(
     preferred_y: Optional[int] = None,
     preferred_x: Optional[int] = None,
     candidate_cache: Optional[Dict[tuple, List[Tuple[tuple, List[Point]]]]] = None,
+    importance: float = 1.0,
+    history: Optional[Dict[Tuple[int, int], float]] = None,
 ) -> Optional[List[Point]]:
     """Return the quietest clear route with at most two orthogonal bends.
 
@@ -367,7 +381,8 @@ def direct_orthogonal_route(
     scored = [
         (
             _route_candidate_score(
-                route, used, used_axes, preferred_y, preferred_x
+                route, used, used_axes, preferred_y, preferred_x,
+                importance, history,
             ),
             signature,
             route,
@@ -398,7 +413,7 @@ def _route_conflict_score(
     )
     bends = max(0, len(route) - 2)
     return (
-        overlap * 200 + crossings * 300 + corner_touches * 260 + bends * 40,
+        overlap * 200 + crossings * 300 + corner_touches * 260 + bends * BEND_COST,
         crossings,
         overlap,
         corner_touches,
@@ -486,84 +501,67 @@ def _deoverlap_route(
 
 
 def edge_sides(edges: List[Edge], boxes: Dict[str, Box]) -> List[Tuple[str, str]]:
-    result = []
-    north_control_targets = {
-        edge.target
-        for edge in edges
-        if edge.kind in CONTROL_EDGE_KINDS
-        and boxes[edge.source].cy < boxes[edge.target].cy
+    """Minimize a global proxy cost; explicit sides remain hard constraints."""
+    result: List[Optional[Tuple[str, str]]] = [None] * len(edges)
+    side_load: Dict[Tuple[str, str], float] = defaultdict(float)
+
+    def center_stub(box: Box, side: str) -> Tuple[Point, Point]:
+        port = port_point(box, side, 0, 1)
+        return port, outward(port, side)
+
+    order = sorted(
+        range(len(edges)),
+        key=lambda i: (-effective_edge_importance(edges[i], boxes), i),
+    )
+    vectors = {
+        "e": (1, 0), "w": (-1, 0), "s": (0, 1), "n": (0, -1)
     }
-    for e in edges:
-        sb, tb = boxes[e.source], boxes[e.target]
-        fs = e.from_side or infer_side(sb, tb, True)
-        ts = e.to_side or infer_side(tb, sb, False)
-        if (
-            e.from_side is None
-            and e.to_side is None
-            and e.kind == "data"
-            and sb.kind == "memory"
-            and sb.cy > tb.cy
-        ):
-            # Support memories below (or on a fold shelf beside) their
-            # consumers should use facing vertical ports. A west/east choice
-            # creates a hook around the folded row even when the clear corridor
-            # between rows is the most direct route.
-            fs, ts = "n", "s"
-        if (
-            e.to_side is None
-            and e.kind == "data"
-            and sb.group
-            and tb.group
-            and sb.group != tb.group
-            and sb.cy < tb.cy
-            and tb.kind == "memory"
-        ):
-            # A state handoff from an upper component should enter the lower
-            # component's memory from the north. Approaching its east/west side
-            # tends to descend through that component's controller fanout and
-            # creates avoidable crossovers.
-            ts = "n"
-        if (
-            e.to_side is None
-            and e.kind in CONTROL_EDGE_KINDS
-            and tb.kind in {"memory", "fifo"}
-            and tb.cy > sb.cy + ROW_GAP
-        ):
-            # A controller selecting a memory on a lower side shelf should
-            # enter from above. Approaching the west side forces the select
-            # wire through the return datapath occupying that shelf.
-            ts = "n"
-        if (
-            e.to_side is None
-            and e.kind == "data"
-            and e.target in north_control_targets
-            and abs(sb.cy - tb.cy) <= ROUTE_STEP
-            and abs(tb.col - sb.col) > 2
-        ):
-            # A long data bypass into a block with control fan-in above should
-            # approach from below. It stays out of both the north control track
-            # and the direct west-side datapath connection.
-            ts = "s"
-        if e.from_side is None and e.kind in CONTROL_EDGE_KINDS:
-            dx = tb.cx - sb.cx
-            dy = tb.cy - sb.cy
-            if (
-                sb.kind in {"fsm", "arbiter"}
-                and dy > ROW_GAP * 3
-                and tb.col - sb.col >= 2
-            ):
-                # A far downstream control arc should leave through the south
-                # side before turning toward its consumer. Reusing the east
-                # fanout side makes its first horizontal stub cut across the
-                # vertical trunk of a nearer sibling control connection.
-                fs = "s"
-            elif abs(dy) > ROW_GAP * 3 and abs(dx) >= abs(dy) * 0.6:
-                # A long diagonal controller link should leave laterally before
-                # descending; exiting through the bottom tends to encounter the
-                # entire datapath and can send A* around the diagram perimeter.
-                fs = "e" if dx >= 0 else "w"
-        result.append((fs, ts))
-    return result
+    for edge_i in order:
+        edge = edges[edge_i]
+        source, target = boxes[edge.source], boxes[edge.target]
+        weight = effective_edge_importance(edge, boxes)
+        source_sides = [edge.from_side] if edge.from_side else sorted(SIDES)
+        target_sides = [edge.to_side] if edge.to_side else sorted(SIDES)
+        candidates = []
+        for from_side in source_sides:
+            for to_side in target_sides:
+                source_port, start = center_stub(source, from_side)
+                target_port, goal = center_stub(target, to_side)
+                dx, dy = target.cx - source.cx, target.cy - source.cy
+                out_dx, out_dy = vectors[from_side]
+                target_dx, target_dy = vectors[to_side]
+                wrong_way = int(dx * out_dx + dy * out_dy < 0)
+                wrong_way += int(dx * target_dx + dy * target_dy > 0)
+                aligned = start.x == goal.x or start.y == goal.y
+                expected_bends = 0 if aligned else (
+                    1 if (from_side in {"e", "w"}) != (to_side in {"e", "w"}) else 2
+                )
+                distance = abs(start.x - goal.x) + abs(start.y - goal.y)
+                demand = side_load[(edge.source, from_side)] + side_load[(edge.target, to_side)]
+                blocked_stubs = sum(
+                    _segment_intersects_rect(port, stub, _box_rect(other, ROUTE_CLEAR), interior=True)
+                    for port, stub in (
+                        (source_port, start),
+                        (target_port, goal),
+                    )
+                    for other in boxes.values()
+                    if other.id not in {source.id, target.id}
+                )
+                vertical_control_bias = int(
+                    edge.kind in CONTROL_EDGE_KINDS
+                    and abs(dy) > abs(dx)
+                    and from_side in {"e", "w"}
+                ) * 25
+                cost = weight * (
+                    distance + expected_bends * BEND_COST + wrong_way * 100
+                    + vertical_control_bias + blocked_stubs * 10000
+                ) + demand * weight * 35
+                candidates.append((cost, expected_bends, from_side, to_side))
+        _, _, from_side, to_side = min(candidates)
+        result[edge_i] = (from_side, to_side)
+        side_load[(edge.source, from_side)] += weight
+        side_load[(edge.target, to_side)] += weight
+    return [value for value in result if value is not None]
 
 
 def assign_ports(
@@ -740,7 +738,7 @@ def resolved_via(e: Edge, boxes: Dict[str, Box]) -> str:
     return "auto"
 
 
-def route_edges(
+def _route_edges_once(
     edges: List[Edge],
     boxes_list: List[Box],
     width: int,
@@ -750,8 +748,13 @@ def route_edges(
     obstacle_rects: Sequence[Rect] = (),
     *,
     _source_port_coords: Optional[Dict[int, int]] = None,
+    _target_port_coords: Optional[Dict[int, int]] = None,
     _optimize_ports: bool = True,
     _direct_cache: Optional[Dict[tuple, List[Tuple[tuple, List[Point]]]]] = None,
+    _order: Optional[Sequence[int]] = None,
+    _history: Optional[Dict[Tuple[int, int], float]] = None,
+    _sides: Optional[Sequence[Tuple[str, str]]] = None,
+    _avoid_facing_stub_overlap: bool = False,
 ) -> Tuple[List[List[Point]], List[str]]:
     boxes = {b.id: b for b in boxes_list}
     routing_boxes = [*boxes_list]
@@ -774,7 +777,7 @@ def route_edges(
     for box in boxes_list:
         if box.group:
             group_members[box.group].append(box)
-    sides = edge_sides(edges, boxes)
+    sides = list(_sides) if _sides is not None else edge_sides(edges, boxes)
     ports = assign_ports(edges, sides, boxes)
     if obstacle_rects:
         adjusted_ports = list(ports)
@@ -826,10 +829,10 @@ def route_edges(
             adjusted_sides[edge_i] = (from_side, to_side)
         ports = adjusted_ports
         sides = adjusted_sides
-    if _source_port_coords:
+    if _source_port_coords or _target_port_coords:
         adjusted_ports = []
         for edge_i, (p1, p2, fs, ts) in enumerate(ports):
-            if edge_i in _source_port_coords:
+            if _source_port_coords and edge_i in _source_port_coords:
                 coord = _source_port_coords[edge_i]
                 p1 = (
                     Point(p1.x, coord)
@@ -839,8 +842,66 @@ def route_edges(
                 p1 = _rendered_boundary_point(
                     boxes[edges[edge_i].source], fs, p1.x, p1.y
                 )
+            if _target_port_coords and edge_i in _target_port_coords:
+                coord = _target_port_coords[edge_i]
+                p2 = (
+                    Point(p2.x, coord)
+                    if ts in {"e", "w"}
+                    else Point(coord, p2.y)
+                )
+                p2 = _rendered_boundary_point(
+                    boxes[edges[edge_i].target], ts, p2.x, p2.y
+                )
             adjusted_ports.append((p1, p2, fs, ts))
         ports = adjusted_ports
+    stub_limits: Dict[Tuple[int, int], int] = {}
+    if _avoid_facing_stub_overlap:
+        endpoints = [
+            (edge_i, endpoint, point, side)
+            for edge_i, (p1, p2, fs, ts) in enumerate(ports)
+            for endpoint, point, side in ((0, p1, fs), (1, p2, ts))
+        ]
+        for left_index, left in enumerate(endpoints):
+            edge_i, endpoint_i, point_i, side_i = left
+            for edge_j, endpoint_j, point_j, side_j in endpoints[left_index + 1:]:
+                if edge_i == edge_j:
+                    continue
+                if (
+                    point_i.y == point_j.y
+                    and {side_i, side_j} == {"e", "w"}
+                    and (
+                        (point_i.x < point_j.x and side_i == "e")
+                        or (point_j.x < point_i.x and side_j == "e")
+                    )
+                ):
+                    limit = max(
+                        ROUTE_STEP,
+                        _floor_snap(abs(point_j.x - point_i.x) / 2),
+                    )
+                    stub_limits[(edge_i, endpoint_i)] = min(
+                        limit, stub_limits.get((edge_i, endpoint_i), limit)
+                    )
+                    stub_limits[(edge_j, endpoint_j)] = min(
+                        limit, stub_limits.get((edge_j, endpoint_j), limit)
+                    )
+                elif (
+                    point_i.x == point_j.x
+                    and {side_i, side_j} == {"n", "s"}
+                    and (
+                        (point_i.y < point_j.y and side_i == "s")
+                        or (point_j.y < point_i.y and side_j == "s")
+                    )
+                ):
+                    limit = max(
+                        ROUTE_STEP,
+                        _floor_snap(abs(point_j.y - point_i.y) / 2),
+                    )
+                    stub_limits[(edge_i, endpoint_i)] = min(
+                        limit, stub_limits.get((edge_i, endpoint_i), limit)
+                    )
+                    stub_limits[(edge_j, endpoint_j)] = min(
+                        limit, stub_limits.get((edge_j, endpoint_j), limit)
+                    )
     source_side_fanout: Dict[Tuple[str, str], int] = defaultdict(int)
     for edge, (_, _, from_side, _) in zip(edges, ports):
         source_side_fanout[(edge.source, from_side)] += 1
@@ -862,9 +923,10 @@ def route_edges(
     # Establish short datapath links before longer fanout and return paths.
     # This makes the visual backbone stable while later routes choose among
     # the remaining quiet channels.
-    order = sorted(
+    order = list(_order) if _order is not None else sorted(
         range(len(edges)),
         key=lambda i: (
+            -effective_edge_importance(edges[i], boxes),
             {"data": 0, "clock": 1, "control": 2, "response": 3}[edges[i].kind],
             (
                 abs(boxes[edges[i].source].cx - boxes[edges[i].target].cx)
@@ -877,9 +939,12 @@ def route_edges(
 
     for i in order:
         e = edges[i]
+        edge_weight = effective_edge_importance(e, boxes)
         p1, p2, fs, ts = ports[i]
         source_stub = PORT_STUB if fs in {"e", "w"} else VERTICAL_PORT_STUB
         target_stub = PORT_STUB if ts in {"e", "w"} else VERTICAL_PORT_STUB
+        source_stub = min(source_stub, stub_limits.get((i, 0), source_stub))
+        target_stub = min(target_stub, stub_limits.get((i, 1), target_stub))
         if fs == "e" and ts == "w" and p1.x <= p2.x:
             available = max(2 * ROUTE_STEP, p2.x - p1.x - ROUTE_STEP)
             source_stub = target_stub = min(PORT_STUB, available // 2)
@@ -1201,26 +1266,56 @@ def route_edges(
                     preferred_y,
                     preferred_trunk_x,
                     direct_cache,
+                    edge_weight,
+                    _history,
                 )
                 if direct is not None:
                     core = direct
                 else:
                     core, used_fallback = astar_route(
-                        s, t, routing_boxes, width, height, endpoint_ids, used, preferred_y, used_axes
+                        s, t, routing_boxes, width, height, endpoint_ids, used,
+                        preferred_y, used_axes, edge_weight, _history
                     )
 
-        if used_fallback:
-            warnings.append(
-                f"edge {i} ({e.source}->{e.target}) used fallback routing; inspect or adjust the IR"
-            )
-
-        route = simplify_polyline([p1, s] + core[1:-1] + [t, p2])
+        raw_route = simplify_polyline([p1, s] + core[1:-1] + [t, p2])
         route = _deoverlap_route(
-            route,
+            raw_route,
             list(routed.values()),
             routing_boxes,
             endpoint_ids,
         )
+        def approach_is_outside(boundary: Point, adjacent: Point, side: str) -> bool:
+            return {
+                "e": adjacent.x > boundary.x,
+                "w": adjacent.x < boundary.x,
+                "n": adjacent.y < boundary.y,
+                "s": adjacent.y > boundary.y,
+            }[side]
+        if (
+            len(route) < 2
+            or not approach_is_outside(route[0], route[1], fs)
+            or not approach_is_outside(route[-1], route[-2], ts)
+        ):
+            repaired_core, repair_fallback = astar_route(
+                s, t, routing_boxes, width, height, endpoint_ids, used,
+                None, used_axes, edge_weight, _history,
+            )
+            repaired = simplify_polyline(
+                [p1, s] + repaired_core[1:-1] + [t, p2]
+            )
+            if (
+                len(repaired) >= 2
+                and approach_is_outside(repaired[0], repaired[1], fs)
+                and approach_is_outside(repaired[-1], repaired[-2], ts)
+            ):
+                route = repaired
+                used_fallback = repair_fallback
+            else:
+                route = raw_route
+        if used_fallback:
+            warnings.append(
+                f"edge {i} ({e.source}->{e.target}) used fallback routing; inspect or adjust the IR"
+            )
         routed[i] = route
         for a, b in zip(route, route[1:]):
             if a.x == b.x:
@@ -1238,33 +1333,45 @@ def route_edges(
         routes.append(routed[i])
 
     if _optimize_ports and len(edges) > 1:
-        source_side_edges: Dict[Tuple[str, str], List[int]] = defaultdict(list)
-        base_coords: Dict[int, int] = {}
-        for edge_i, (p1, _, fs, _) in enumerate(ports):
-            source_side_edges[(edges[edge_i].source, fs)].append(edge_i)
-            base_coords[edge_i] = p1.y if fs in {"e", "w"} else p1.x
+        side_connections: Dict[
+            Tuple[str, str], List[Tuple[int, int]]
+        ] = defaultdict(list)
+        base_coords: Dict[Tuple[int, int], int] = {}
+        for edge_i, (p1, p2, fs, ts) in enumerate(ports):
+            side_connections[(edges[edge_i].source, fs)].append((edge_i, 0))
+            side_connections[(edges[edge_i].target, ts)].append((edge_i, 1))
+            base_coords[(edge_i, 0)] = p1.y if fs in {"e", "w"} else p1.x
+            base_coords[(edge_i, 1)] = p2.y if ts in {"e", "w"} else p2.x
 
         current_routes = routes
         current_warnings = warnings
-        current_overrides = dict(_source_port_coords or {})
-        current_score = route_quality_score(current_routes, current_warnings)
+        current_source_overrides = dict(_source_port_coords or {})
+        current_target_overrides = dict(_target_port_coords or {})
+        current_score = route_quality_score(
+            current_routes, current_warnings, edges, boxes_list, width * height
+        )
         for _ in range(2):
             improved = False
-            for _, edge_indices in sorted(source_side_edges.items()):
-                if not 2 <= len(edge_indices) <= 4:
+            for _, connections in sorted(side_connections.items()):
+                if not 2 <= len(connections) <= 4:
                     continue
                 current_coords = tuple(
-                    current_overrides.get(edge_i, base_coords[edge_i])
-                    for edge_i in edge_indices
+                    (
+                        current_source_overrides.get(edge_i, base_coords[(edge_i, endpoint)])
+                        if endpoint == 0
+                        else current_target_overrides.get(edge_i, base_coords[(edge_i, endpoint)])
+                    )
+                    for edge_i, endpoint in connections
                 )
                 best = None
                 for permutation in sorted(set(itertools.permutations(current_coords))):
                     if permutation == current_coords:
                         continue
-                    trial_overrides = dict(current_overrides)
-                    for edge_i, coord in zip(edge_indices, permutation):
-                        trial_overrides[edge_i] = coord
-                    trial_routes, trial_warnings = route_edges(
+                    trial_source = dict(current_source_overrides)
+                    trial_target = dict(current_target_overrides)
+                    for (edge_i, endpoint), coord in zip(connections, permutation):
+                        (trial_source if endpoint == 0 else trial_target)[edge_i] = coord
+                    trial_routes, trial_warnings = _route_edges_once(
                         edges,
                         boxes_list,
                         width,
@@ -1272,12 +1379,14 @@ def route_edges(
                         top_lane_base,
                         bottom_lane_base,
                         obstacle_rects,
-                        _source_port_coords=trial_overrides,
+                        _source_port_coords=trial_source,
+                        _target_port_coords=trial_target,
                         _optimize_ports=False,
                         _direct_cache=direct_cache,
                         )
                     trial_score = route_quality_score(
-                        trial_routes, trial_warnings
+                        trial_routes, trial_warnings, edges, boxes_list,
+                        width * height,
                     )
                     if trial_score < current_score and (
                         best is None or trial_score < best[0]
@@ -1286,15 +1395,209 @@ def route_edges(
                             trial_score,
                             trial_routes,
                             trial_warnings,
-                            trial_overrides,
+                            trial_source,
+                            trial_target,
                         )
                 if best is None:
                     continue
-                current_score, current_routes, current_warnings, current_overrides = best
+                (
+                    current_score,
+                    current_routes,
+                    current_warnings,
+                    current_source_overrides,
+                    current_target_overrides,
+                ) = best
                 improved = True
             if not improved:
                 break
         routes, warnings = current_routes, current_warnings
+    return routes, warnings
+
+
+def _route_grid_cells(route: Sequence[Point]) -> set[Tuple[int, int]]:
+    cells: set[Tuple[int, int]] = set()
+    for start, end in zip(route, route[1:]):
+        if start.x == end.x:
+            for y in range(_snap(min(start.y, end.y)), _snap(max(start.y, end.y)) + ROUTE_STEP, ROUTE_STEP):
+                cells.add((_snap(start.x), y))
+        elif start.y == end.y:
+            for x in range(_snap(min(start.x, end.x)), _snap(max(start.x, end.x)) + ROUTE_STEP, ROUTE_STEP):
+                cells.add((x, _snap(start.y)))
+    return cells
+
+
+def route_edges(
+    edges: List[Edge],
+    boxes_list: List[Box],
+    width: int,
+    height: int,
+    top_lane_base: int = TOP_LANE_Y,
+    bottom_lane_base: Optional[int] = None,
+    obstacle_rects: Sequence[Rect] = (),
+) -> Tuple[List[List[Point]], List[str]]:
+    """Multi-start negotiated-congestion router with rip-up and reroute."""
+    if not edges:
+        return [], []
+    boxes = {box.id: box for box in boxes_list}
+    routing_width = min(
+        width,
+        _snap(max(box.right for box in boxes_list) + MARGIN_X),
+    )
+    selected_sides = edge_sides(edges, boxes)
+    importance = [effective_edge_importance(edge, boxes) for edge in edges]
+    manhattan = [
+        abs(boxes[edge.source].cx - boxes[edge.target].cx)
+        + abs(boxes[edge.source].cy - boxes[edge.target].cy)
+        for edge in edges
+    ]
+    starts = [
+        sorted(
+            range(len(edges)),
+            key=lambda i: (
+                -importance[i],
+                {"data": 0, "clock": 1, "control": 2, "response": 3}[edges[i].kind],
+                manhattan[i],
+                i,
+            ),
+        ),
+        sorted(range(len(edges)), key=lambda i: (-importance[i], manhattan[i], i)),
+        sorted(range(len(edges)), key=lambda i: (manhattan[i], -importance[i], i)),
+        sorted(range(len(edges)), key=lambda i: (-manhattan[i], -importance[i], i)),
+    ]
+    cache: Dict[tuple, List[Tuple[tuple, List[Point]]]] = {}
+    candidates = []
+    for start_index, order in enumerate(starts):
+        routes, warnings = _route_edges_once(
+            edges, boxes_list, routing_width, height, top_lane_base, bottom_lane_base,
+            obstacle_rects, _optimize_ports=False, _direct_cache=cache,
+            _order=order, _sides=selected_sides,
+            _avoid_facing_stub_overlap=True,
+        )
+        score = route_quality_score(
+            routes, warnings, edges, boxes_list, width * height
+        )
+        candidates.append((score, start_index, order, routes, warnings))
+
+    score, _, order, routes, warnings = min(candidates, key=lambda item: (item[0], item[1]))
+    history: Dict[Tuple[int, int], float] = defaultdict(float)
+    for _ in range(2):
+        conflicts = [0] * len(edges)
+        occupancy: Dict[Tuple[int, int], int] = defaultdict(int)
+        route_cells = [_route_grid_cells(route) for route in routes]
+        for cells in route_cells:
+            for cell in cells:
+                occupancy[cell] += 1
+        for cell, count in occupancy.items():
+            if count > 1:
+                history[cell] += 10.0 * (count - 1)
+        for left in range(len(routes)):
+            for right in range(left + 1, len(routes)):
+                severity = (
+                    len(perpendicular_route_crossings(routes[left], routes[right])) * 4
+                    + len(ambiguous_route_corner_touches(routes[left], routes[right])) * 3
+                    + int(collinear_route_overlap_length(routes[left], routes[right]) > 0) * 5
+                )
+                conflicts[left] += severity
+                conflicts[right] += severity
+        if not any(conflicts):
+            break
+        ripup_order = sorted(
+            range(len(edges)),
+            key=lambda i: (-conflicts[i], -importance[i], manhattan[i], i),
+        )
+        trial_routes, trial_warnings = _route_edges_once(
+            edges, boxes_list, routing_width, height, top_lane_base, bottom_lane_base,
+            obstacle_rects, _optimize_ports=False, _direct_cache=cache,
+            _order=ripup_order, _history=history, _sides=selected_sides,
+            _avoid_facing_stub_overlap=True,
+        )
+        trial_score = route_quality_score(
+            trial_routes, trial_warnings, edges, boxes_list, width * height
+        )
+        if trial_score < score:
+            score, order, routes, warnings = trial_score, ripup_order, trial_routes, trial_warnings
+
+    # The greedy proxy above supplies a good starting point, but port sides are
+    # ultimately a routed global decision. Explore alternatives on the nets
+    # currently paying the most for bends, distance, or conflicts.
+    for _ in range(2):
+        side_candidates = []
+        alternatives_by_edge = []
+        per_edge_cost = []
+        for edge_i, route in enumerate(routes):
+            length = sum(
+                abs(start.x - end.x) + abs(start.y - end.y)
+                for start, end in zip(route, route[1:])
+            )
+            conflicts = sum(
+                len(perpendicular_route_crossings(route, other)) * 1000
+                + len(ambiguous_route_corner_touches(route, other)) * 500
+                + collinear_route_overlap_length(route, other) * 200
+                for other_i, other in enumerate(routes)
+                if other_i != edge_i
+            )
+            per_edge_cost.append((
+                effective_edge_importance(edges[edge_i], boxes)
+                * (length + max(0, len(route) - 2) * BEND_COST + conflicts),
+                edge_i,
+            ))
+        for _, edge_i in sorted(per_edge_cost, reverse=True)[:8]:
+            edge = edges[edge_i]
+            from_sides = [edge.from_side] if edge.from_side else sorted(SIDES)
+            to_sides = [edge.to_side] if edge.to_side else sorted(SIDES)
+            alternatives = []
+            for from_side in from_sides:
+                for to_side in to_sides:
+                    if (from_side, to_side) != selected_sides[edge_i]:
+                        alternatives.append((edge_i, from_side, to_side))
+            alternatives_by_edge.append(alternatives)
+        # Exhaust the two worst nets. The next pass recomputes costs, so an
+        # accepted change cannot permanently starve another connection.
+        for alternatives in alternatives_by_edge[:2]:
+            side_candidates.extend(alternatives)
+        best_side_trial = None
+        for candidate_index, (edge_i, from_side, to_side) in enumerate(
+            side_candidates[:24]
+        ):
+            trial_sides = list(selected_sides)
+            trial_sides[edge_i] = (from_side, to_side)
+            trial_routes, trial_warnings = _route_edges_once(
+                edges, boxes_list, routing_width, height, top_lane_base,
+                bottom_lane_base, obstacle_rects, _optimize_ports=False,
+                _direct_cache=cache, _order=order, _history=history,
+                _sides=trial_sides,
+                _avoid_facing_stub_overlap=True,
+            )
+            trial_score = route_quality_score(
+                trial_routes, trial_warnings, edges, boxes_list, width * height
+            )
+            if trial_score < score and (
+                best_side_trial is None
+                or (trial_score, candidate_index)
+                < (best_side_trial[0], best_side_trial[1])
+            ):
+                best_side_trial = (
+                    trial_score, candidate_index, trial_sides,
+                    trial_routes, trial_warnings,
+                )
+        if best_side_trial is None:
+            break
+        score = best_side_trial[0]
+        selected_sides = best_side_trial[2]
+        routes, warnings = best_side_trial[3:5]
+
+    optimized_routes, optimized_warnings = _route_edges_once(
+        edges, boxes_list, routing_width, height, top_lane_base, bottom_lane_base,
+        obstacle_rects, _optimize_ports=True, _direct_cache=cache,
+        _order=order, _history=history, _sides=selected_sides,
+        _avoid_facing_stub_overlap=True,
+    )
+    optimized_score = route_quality_score(
+        optimized_routes, optimized_warnings, edges, boxes_list, width * height
+    )
+    if optimized_score < score:
+        routes, warnings = optimized_routes, optimized_warnings
+
     return routes, warnings
 
 

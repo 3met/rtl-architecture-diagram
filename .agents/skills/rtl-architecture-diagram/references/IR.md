@@ -26,8 +26,8 @@ The renderer accepts a compact JSON object. Prefer defaults and add optional fie
   "kind": "module",
   "subtitle": "optional short detail",
   "bigger": true,
+  "importance": 2,
   "group": "optional_group_id",
-  "at": [1, 0],
   "size": [160, 70]
 }
 ```
@@ -37,7 +37,8 @@ The renderer accepts a compact JSON object. Prefer defaults and add optional fie
 - `kind` defaults to `module`. Choose from `module`, `logic`, `memory`, `fifo`, `mux`, `demux`, `reg`, `counter`, `fsm`, `arbiter`, `io`, `alu`, `adder`, `subtractor`, `addsub`, `multiplier`, `comparator`, `and`, `or`, `xor`, and `not`.
 - `subtitle` adds a short second-level description.
 - `group` places the block in a visual enclosure declared under `groups`.
-- `at:[column,row]` anchors semantic order and lane, not pixels. Omit it for automatic placement. Anchored and automatic blocks may be mixed, but two anchors cannot share a position.
+- `importance` is an optional positive number (default `1`). It increases the routing cost of every incident edge.
+- `at:[column,row]` is an optional hard semantic-coordinate override, not a normal generation field and not a pixel position. Anchored blocks are immovable during global optimization. Automatic and anchored blocks may be mixed, but two anchors cannot share a position.
 - `bigger` and `smaller` are optional booleans for architectural prominence. Never set both.
 - `size:[width,height]` fixes the SVG-unit dimensions. Omit it unless automatic sizing is inadequate; both values must exceed 20.
 
@@ -53,9 +54,7 @@ Use `logic` for generic combinational behavior. Use a specific arithmetic or gat
   "count": 16,
   "width": 4,
   "kind": "data",
-  "from_side": "e",
-  "to_side": "w",
-  "via": "auto"
+  "importance": 3
 }
 ```
 
@@ -65,6 +64,7 @@ Use `logic` for generic combinational behavior. Use a specific arithmetic or gat
 - `width` is the optional positive bit width of one value. It renders as an `Nb` annotation when useful.
 - `count` is an optional positive repetition count and requires `width`. Together, `{"count":512,"width":5}` renders as `512 × 5b`. Use it for lanes, rows, entries, or other repeated equal-width values instead of flattening them to `2560b`.
 - `kind` is `data` (default), `control`, `response`, or `clock`.
+- `importance` is an optional positive number (default `1`). It weights wire length, bends, crossings, overlap, and congestion; endpoint block importance also contributes.
 - `from_side` and `to_side` may be `n`, `s`, `e`, or `w`. Normally omit them; use them only when the attachment side matters.
 - `via` is `auto` (default), `top`, or `bottom`. Use an exterior route only after automatic routing produces an unclear result.
 
@@ -89,7 +89,7 @@ Group IDs must be unique. Groups are visual enclosures and do not change connect
 
 ## Layout conventions
 
-- Prefer automatic placement.
+- Prefer automatic placement. The placer estimates row/column channel demand, then jointly improves placement, port sides, and routing.
 - Use columns for semantic progression and rows for parallel lanes when anchors are necessary.
 - Place controllers above and support memories below the datapath when that makes the flow clearer.
 - Mark feedback and return paths as `response`; mark control arcs as `control`.
